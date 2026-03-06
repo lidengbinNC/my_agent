@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
-from my_agent.api.routes import chat, health
+from my_agent.api.routes import chat, health, tool
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
 from my_agent.utils.logger import get_logger, setup_logging
@@ -56,6 +56,7 @@ app.add_middleware(TracingMiddleware)
 # ----- 路由 -----
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(tool.router, prefix="/api/v1")
 
 # ----- 静态文件 & 模板 -----
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

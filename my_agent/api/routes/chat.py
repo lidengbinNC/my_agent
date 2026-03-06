@@ -1,14 +1,13 @@
-"""Agent 对话路由 — 支持 SSE 流式输出思考过程。
+"""Agent 对话路由 — ReAct 引擎驱动，SSE 实时推送思考过程。
 
 面试考点:
-  - SSE (Server-Sent Events) 的实现原理
-  - 结构化事件: thinking / content / tool_call / tool_result / done / error
-  - AsyncGenerator 驱动的流式响应
+  - SSE 结构化事件: thinking / action / observation / final_answer / error
+  - ReAct 引擎 AsyncGenerator 驱动流式推送
+  - 非流式模式: 收集所有步骤后一次性返回
 """
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import AsyncGenerator
 
@@ -21,37 +20,22 @@ from my_agent.api.schemas.chat import (
     SSEEvent,
     SSEEventType,
 )
-from my_agent.config.settings import settings
-from my_agent.core.dependencies import get_llm_client
-from my_agent.domain.llm.base import BaseLLMClient
-from my_agent.domain.llm.message import Message, SystemMessage, UserMessage
-from my_agent.utils.logger import get_logger
-
-logger = get_logger(__name__)
+from my_agent.core.dependencies import get_react_engine
+from my_agent.core.engine.react_engine import ReActEngine, ReActStepType
 
 router = APIRouter(tags=["chat"])
-
-_DEFAULT_SYSTEM_PROMPT = (
-    "你是 MyAgent，一个智能助手。你能够分析问题、调用工具、完成用户的各种任务。"
-    "回答时请简洁准确，使用中文。"
-)
 
 
 @router.post("/chat/completions")
 async def chat_completions(
     req: ChatRequest,
-    llm: BaseLLMClient = Depends(get_llm_client),
+    engine: ReActEngine = Depends(get_react_engine),
 ):
     session_id = req.session_id or str(uuid.uuid4())
-    system_prompt = settings.system_prompt or _DEFAULT_SYSTEM_PROMPT
-    messages: list[Message] = [
-        SystemMessage(system_prompt),
-        UserMessage(req.message),
-    ]
 
     if req.stream:
         return StreamingResponse(
-            _stream_response(llm, messages, session_id),
+            _stream_react(engine, req.message, session_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -60,68 +44,95 @@ async def chat_completions(
             },
         )
 
-    # 非流式
-    response = await llm.chat(messages)
+    # 非流式：收集所有步骤
+    final_answer = ""
+    steps_data = []
+    async for step in engine.run(req.message):
+        steps_data.append({"type": step.type.value, "iteration": step.iteration})
+        if step.type == ReActStepType.FINAL_ANSWER:
+            final_answer = step.answer
+        elif step.type == ReActStepType.ERROR:
+            final_answer = f"[错误] {step.error}"
+
     return ChatResponse(
         session_id=session_id,
-        content=response.content or "",
-        usage={
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        },
-        model=response.model,
+        content=final_answer,
+        usage={},
     )
 
 
-async def _stream_response(
-    llm: BaseLLMClient,
-    messages: list[Message],
+async def _stream_react(
+    engine: ReActEngine,
+    query: str,
     session_id: str,
 ) -> AsyncGenerator[str, None]:
-    """SSE 流式生成器。"""
-    # 发送 thinking 事件
+    """将 ReAct 步骤转换为 SSE 事件流。"""
     yield SSEEvent(
         event=SSEEventType.THINKING,
-        data={"session_id": session_id, "message": "正在思考..."},
+        data={"session_id": session_id, "message": "Agent 启动，开始推理..."},
     ).to_sse()
 
     try:
-        full_content = ""
-        async for chunk in llm.stream_chat(messages):
-            if chunk.delta_content:
-                full_content += chunk.delta_content
+        async for step in engine.run(query):
+            if step.type == ReActStepType.THINKING:
                 yield SSEEvent(
-                    event=SSEEventType.CONTENT,
-                    data={"delta": chunk.delta_content},
+                    event=SSEEventType.THINKING,
+                    data={
+                        "iteration": step.iteration,
+                        "message": f"第 {step.iteration} 步：思考中...",
+                    },
                 ).to_sse()
 
-            if chunk.finish_reason == "stop":
-                usage_data = {}
-                if chunk.usage:
-                    usage_data = {
-                        "prompt_tokens": chunk.usage.prompt_tokens,
-                        "completion_tokens": chunk.usage.completion_tokens,
-                        "total_tokens": chunk.usage.total_tokens,
-                    }
+            elif step.type == ReActStepType.ACTION:
+                yield SSEEvent(
+                    event=SSEEventType.TOOL_CALL,
+                    data={
+                        "iteration": step.iteration,
+                        "thought": step.thought,
+                        "tool": step.action,
+                        "args": step.action_input,
+                    },
+                ).to_sse()
+
+            elif step.type == ReActStepType.OBSERVATION:
+                yield SSEEvent(
+                    event=SSEEventType.TOOL_RESULT,
+                    data={
+                        "iteration": step.iteration,
+                        "tool": step.action,
+                        "result": step.observation,
+                    },
+                ).to_sse()
+
+            elif step.type == ReActStepType.FINAL_ANSWER:
+                # 先推送 thought
+                if step.thought:
+                    yield SSEEvent(
+                        event=SSEEventType.THINKING,
+                        data={"iteration": step.iteration, "message": step.thought},
+                    ).to_sse()
+                # 逐字推送最终答案（模拟流式）
+                answer = step.answer
+                chunk_size = 10
+                for i in range(0, len(answer), chunk_size):
+                    yield SSEEvent(
+                        event=SSEEventType.CONTENT,
+                        data={"delta": answer[i: i + chunk_size]},
+                    ).to_sse()
                 yield SSEEvent(
                     event=SSEEventType.DONE,
-                    data={
-                        "session_id": session_id,
-                        "content": full_content,
-                        "usage": usage_data,
-                    },
+                    data={"session_id": session_id, "content": answer},
                 ).to_sse()
                 return
 
-        # 流正常结束但没有 finish_reason=stop
-        yield SSEEvent(
-            event=SSEEventType.DONE,
-            data={"session_id": session_id, "content": full_content},
-        ).to_sse()
+            elif step.type == ReActStepType.ERROR:
+                yield SSEEvent(
+                    event=SSEEventType.ERROR,
+                    data={"error": step.error, "iteration": step.iteration},
+                ).to_sse()
+                return
 
     except Exception as e:
-        logger.error("stream_error", error=str(e))
         yield SSEEvent(
             event=SSEEventType.ERROR,
             data={"error": str(e)},

@@ -9,15 +9,18 @@
 from __future__ import annotations
 
 from my_agent.config.settings import settings
+from my_agent.core.engine.react_engine import ReActEngine
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.model_router import ComplexityLevel, ModelRouter, ModelTier
 from my_agent.domain.llm.openai_client import OpenAIClient
+from my_agent.domain.tool.registry import get_registry
 from my_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # 全局单例
 _llm_client: BaseLLMClient | None = None
+_react_engine: ReActEngine | None = None
 
 
 def _create_llm_client() -> BaseLLMClient:
@@ -89,8 +92,29 @@ def get_llm_client() -> BaseLLMClient:
     return _llm_client
 
 
+def get_react_engine() -> ReActEngine:
+    """获取 ReAct 引擎单例。"""
+    global _react_engine
+    if _react_engine is None:
+        # 确保内置工具已注册
+        import my_agent.domain.tool.builtin  # noqa: F401
+
+        _react_engine = ReActEngine(
+            llm=get_llm_client(),
+            tool_registry=get_registry(),
+            max_iterations=10,
+            tool_timeout=30.0,
+        )
+        logger.info(
+            "react_engine_initialized",
+            tools=get_registry().names(),
+        )
+    return _react_engine
+
+
 async def shutdown_clients() -> None:
-    global _llm_client
+    global _llm_client, _react_engine
+    _react_engine = None
     if _llm_client is not None:
         await _llm_client.close()
         _llm_client = None
