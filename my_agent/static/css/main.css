@@ -1,0 +1,55 @@
+/* MyAgent 自定义样式 */
+
+/* 消息气泡 */
+.msg-user {
+    @apply flex justify-end;
+}
+.msg-user .msg-bubble {
+    @apply bg-primary-600 text-white rounded-2xl rounded-br-md px-4 py-3 max-w-[80%] text-sm leading-relaxed;
+}
+
+.msg-assistant {
+    @apply flex justify-start;
+}
+.msg-assistant .msg-bubble {
+    @apply bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-bl-md px-4 py-3 max-w-[80%] text-sm leading-relaxed shadow-sm;
+}
+
+/* 思考过程指示器 */
+.thinking-indicator {
+    @apply flex items-center gap-2 text-gray-500 text-xs py-2 px-3 bg-amber-50 border border-amber-200 rounded-lg;
+}
+.thinking-indicator .dot-pulse {
+    @apply flex gap-1;
+}
+.thinking-indicator .dot-pulse span {
+    @apply w-1.5 h-1.5 bg-amber-500 rounded-full;
+    animation: pulse-dot 1.4s infinite ease-in-out both;
+}
+.thinking-indicator .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-indicator .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes pulse-dot {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+}
+
+/* Textarea 自动高度 */
+textarea {
+    field-sizing: content;
+}
+
+/* 滚动条美化 */
+#messages::-webkit-scrollbar {
+    width: 6px;
+}
+#messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+#messages::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 3px;
+}
+#messages::-webkit-scrollbar-thumb:hover {
+    background: #9ca3af;
+}

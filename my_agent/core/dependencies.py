@@ -1,0 +1,96 @@
+"""依赖注入 — 管理全局单例组件的创建和生命周期。
+
+面试考点:
+  - 单例模式: LLM 客户端全局复用，避免重复创建连接池
+  - FastAPI Depends: 声明式依赖注入
+  - 生命周期管理: startup 创建 / shutdown 销毁
+"""
+
+from __future__ import annotations
+
+from my_agent.config.settings import settings
+from my_agent.domain.llm.base import BaseLLMClient
+from my_agent.domain.llm.model_router import ComplexityLevel, ModelRouter, ModelTier
+from my_agent.domain.llm.openai_client import OpenAIClient
+from my_agent.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+# 全局单例
+_llm_client: BaseLLMClient | None = None
+
+
+def _create_llm_client() -> BaseLLMClient:
+    """根据配置创建 LLM 客户端。
+
+    如果配置了多模型，返回 ModelRouter；否则返回单个 OpenAIClient。
+    """
+    default_cfg = settings.default_llm
+    if not default_cfg.is_configured():
+        raise RuntimeError(
+            "LLM 未配置，请在 .env 中设置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL"
+        )
+
+    default_client = OpenAIClient(
+        api_key=default_cfg.api_key,
+        base_url=default_cfg.base_url,
+        model=default_cfg.model,
+        timeout=settings.request_timeout,
+        max_retries=settings.max_retries,
+    )
+
+    tiers: list[ModelTier] = [
+        ModelTier(name="default", client=default_client, complexity=ComplexityLevel.MODERATE),
+    ]
+
+    lite_cfg = settings.lite_llm
+    if lite_cfg.is_configured() and lite_cfg.model != default_cfg.model:
+        lite_client = OpenAIClient(
+            api_key=lite_cfg.api_key,
+            base_url=lite_cfg.base_url,
+            model=lite_cfg.model,
+            timeout=settings.request_timeout,
+            max_retries=settings.max_retries,
+        )
+        tiers.append(ModelTier(name="lite", client=lite_client, complexity=ComplexityLevel.SIMPLE))
+
+    strong_cfg = settings.strong_llm
+    if strong_cfg.is_configured() and strong_cfg.model != default_cfg.model:
+        strong_client = OpenAIClient(
+            api_key=strong_cfg.api_key,
+            base_url=strong_cfg.base_url,
+            model=strong_cfg.model,
+            timeout=settings.request_timeout,
+            max_retries=settings.max_retries,
+        )
+        tiers.append(
+            ModelTier(name="strong", client=strong_client, complexity=ComplexityLevel.COMPLEX)
+        )
+
+    if len(tiers) > 1:
+        logger.info(
+            "model_router_initialized",
+            tiers=[t.name for t in tiers],
+        )
+        return ModelRouter(
+            tiers=tiers,
+            fallback_order=["strong", "default", "lite"],
+        )
+
+    logger.info("single_model_initialized", model=default_cfg.model)
+    return default_client
+
+
+def get_llm_client() -> BaseLLMClient:
+    """FastAPI 依赖注入入口。"""
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = _create_llm_client()
+    return _llm_client
+
+
+async def shutdown_clients() -> None:
+    global _llm_client
+    if _llm_client is not None:
+        await _llm_client.close()
+        _llm_client = None
