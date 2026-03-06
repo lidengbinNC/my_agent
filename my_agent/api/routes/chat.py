@@ -21,6 +21,7 @@ from my_agent.api.schemas.chat import (
     SSEEvent,
     SSEEventType,
 )
+from my_agent.config.settings import settings
 from my_agent.core.dependencies import get_llm_client
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.message import Message, SystemMessage, UserMessage
@@ -30,7 +31,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(tags=["chat"])
 
-SYSTEM_PROMPT = (
+_DEFAULT_SYSTEM_PROMPT = (
     "你是 MyAgent，一个智能助手。你能够分析问题、调用工具、完成用户的各种任务。"
     "回答时请简洁准确，使用中文。"
 )
@@ -42,8 +43,9 @@ async def chat_completions(
     llm: BaseLLMClient = Depends(get_llm_client),
 ):
     session_id = req.session_id or str(uuid.uuid4())
+    system_prompt = settings.system_prompt or _DEFAULT_SYSTEM_PROMPT
     messages: list[Message] = [
-        SystemMessage(SYSTEM_PROMPT),
+        SystemMessage(system_prompt),
         UserMessage(req.message),
     ]
 

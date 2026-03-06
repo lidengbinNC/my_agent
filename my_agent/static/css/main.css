@@ -39,6 +39,40 @@ textarea {
     field-sizing: content;
 }
 
+/* 流式/非流式切换 Toggle */
+.stream-toggle-label {
+    @apply flex items-center gap-2 cursor-pointer select-none;
+}
+
+.stream-toggle-label input[type="checkbox"] {
+    @apply sr-only;
+}
+
+.stream-toggle-track {
+    @apply relative inline-flex w-9 h-5 rounded-full transition-colors duration-200 ease-in-out;
+    background-color: #d1d5db;
+}
+
+.stream-toggle-label input:checked + .stream-toggle-track {
+    background-color: #4f46e5;
+}
+
+.stream-toggle-label input:disabled + .stream-toggle-track {
+    @apply opacity-50 cursor-not-allowed;
+}
+
+.stream-toggle-thumb {
+    @apply absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ease-in-out;
+}
+
+.stream-toggle-label input:checked + .stream-toggle-track .stream-toggle-thumb {
+    transform: translateX(16px);
+}
+
+.stream-toggle-text {
+    @apply text-xs text-gray-500 w-16;
+}
+
 /* 滚动条美化 */
 #messages::-webkit-scrollbar {
     width: 6px;

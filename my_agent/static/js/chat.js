@@ -1,5 +1,5 @@
 /**
- * MyAgent 前端对话交互 — SSE 接收 Agent 思考过程
+ * MyAgent 前端对话交互 — 支持流式（SSE）与非流式两种模式切换
  *
  * 面试考点:
  *   - EventSource API 接收 SSE
@@ -13,8 +13,15 @@ const userInput = document.getElementById('user-input');
 const sendBtn = document.getElementById('send-btn');
 const statusEl = document.getElementById('status-indicator');
 const tokenUsageEl = document.getElementById('token-usage');
+const streamToggle = document.getElementById('stream-toggle');
+const streamModeText = document.getElementById('stream-mode-text');
 
 let isStreaming = false;
+
+// 切换模式时更新文字提示
+streamToggle.addEventListener('change', () => {
+    streamModeText.textContent = streamToggle.checked ? '流式输出' : '非流式输出';
+});
 
 chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -30,7 +37,11 @@ chatForm.addEventListener('submit', async (e) => {
     userInput.style.height = 'auto';
     setStreaming(true);
 
-    await streamChat(message);
+    if (streamToggle.checked) {
+        await streamChat(message);
+    } else {
+        await normalChat(message);
+    }
 });
 
 // Shift+Enter 换行，Enter 发送
@@ -40,6 +51,8 @@ userInput.addEventListener('keydown', (e) => {
         chatForm.dispatchEvent(new Event('submit'));
     }
 });
+
+// ===== 流式响应 =====
 
 async function streamChat(message) {
     const assistantEl = appendAssistantMessage();
@@ -71,37 +84,30 @@ async function streamChat(message) {
             buffer = lines.pop() || '';
 
             for (const line of lines) {
-                if (line.startsWith('event: ')) {
-                    const eventType = line.slice(7).trim();
-                    continue;
-                }
+                if (line.startsWith('event: ')) continue;
                 if (line.startsWith('data: ')) {
                     const dataStr = line.slice(6);
                     try {
                         const data = JSON.parse(dataStr);
-                        // 事件类型从上一行的 event 获取，
-                        // 但我们也可以从 data 推断
                         if (data.delta !== undefined) {
-                            // content event
+                            // content 事件：逐字追加
                             if (thinkingEl.parentNode) thinkingEl.remove();
                             content += data.delta;
                             bubbleEl.innerHTML = formatMarkdown(content);
                             scrollToBottom();
                         } else if (data.message && data.message.includes('思考')) {
-                            // thinking event — 保持显示
+                            // thinking 事件：保持显示
                         } else if (data.content !== undefined && data.session_id) {
-                            // done event
+                            // done 事件
                             if (thinkingEl.parentNode) thinkingEl.remove();
-                            if (data.usage) {
-                                showTokenUsage(data.usage);
-                            }
+                            if (data.usage) showTokenUsage(data.usage);
                         } else if (data.error) {
-                            // error event
+                            // error 事件
                             if (thinkingEl.parentNode) thinkingEl.remove();
                             bubbleEl.innerHTML = `<span class="text-red-500">错误: ${escapeHtml(data.error)}</span>`;
                         }
-                    } catch (parseErr) {
-                        // skip unparseable lines
+                    } catch (_) {
+                        // 忽略无法解析的行
                     }
                 }
             }
@@ -111,6 +117,40 @@ async function streamChat(message) {
             if (thinkingEl.parentNode) thinkingEl.remove();
             bubbleEl.innerHTML = '<span class="text-gray-400">（无响应内容）</span>';
         }
+
+    } catch (err) {
+        if (thinkingEl.parentNode) thinkingEl.remove();
+        bubbleEl.innerHTML = `<span class="text-red-500">请求失败: ${escapeHtml(err.message)}</span>`;
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+// ===== 非流式响应 =====
+
+async function normalChat(message) {
+    const assistantEl = appendAssistantMessage();
+    const bubbleEl = assistantEl.querySelector('.msg-bubble');
+    const thinkingEl = appendThinking();
+
+    try {
+        const resp = await fetch('/api/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, stream: false }),
+        });
+
+        if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error(`HTTP ${resp.status}: ${errText || resp.statusText}`);
+        }
+
+        const data = await resp.json();
+
+        if (thinkingEl.parentNode) thinkingEl.remove();
+        bubbleEl.innerHTML = formatMarkdown(data.content || '（无响应内容）');
+        if (data.usage) showTokenUsage(data.usage);
 
     } catch (err) {
         if (thinkingEl.parentNode) thinkingEl.remove();
@@ -159,11 +199,12 @@ function appendThinking() {
 function setStreaming(val) {
     isStreaming = val;
     sendBtn.disabled = val;
+    streamToggle.disabled = val;
     const statusDot = statusEl.querySelector('span:first-child');
     const statusText = statusEl.querySelector('span:last-child');
     if (val) {
         statusDot.className = 'w-2 h-2 bg-amber-500 rounded-full animate-pulse';
-        statusText.textContent = '生成中...';
+        statusText.textContent = streamToggle.checked ? '流式生成中...' : '请求中...';
     } else {
         statusDot.className = 'w-2 h-2 bg-green-500 rounded-full';
         statusText.textContent = '就绪';
@@ -188,7 +229,6 @@ function escapeHtml(text) {
 }
 
 function formatMarkdown(text) {
-    // 基础 markdown: 代码块、行内代码、加粗
     return escapeHtml(text)
         .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded-lg p-3 my-2 overflow-x-auto text-xs"><code>$2</code></pre>')
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs text-pink-600">$1</code>')

@@ -79,8 +79,18 @@
                     </svg>
                 </button>
             </form>
-            <div class="text-center mt-2">
+            <div class="flex items-center justify-center gap-4 mt-2">
                 <span id="token-usage" class="text-xs text-gray-400"></span>
+                <!-- 流式/非流式切换 -->
+                <label class="stream-toggle-label" title="开启后逐字输出，关闭后等待完整响应">
+                    <input type="checkbox" id="stream-toggle" checked>
+                    <span class="stream-toggle-track">
+                        <span class="stream-toggle-thumb"></span>
+                    </span>
+                    <span class="stream-toggle-text">
+                        <span id="stream-mode-text">流式输出</span>
+                    </span>
+                </label>
             </div>
         </div>
     </main>
