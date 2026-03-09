@@ -64,7 +64,15 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./my_agent.db"
 
     # --- 记忆系统 ---
-    memory_type: str = "window"          # buffer / window / summary
+    # memory_type = "auto" 时根据对话轮数自动升级策略；也可手动指定固定策略
+    #
+    #   轮数 < memory_buffer_turns  → BufferMemory  (完整历史，精确)
+    #   轮数 < memory_window_turns  → WindowMemory  (滑动窗口，省 Token)
+    #   轮数 >= memory_window_turns → SummaryMemory (摘要压缩，长期记忆)
+    #
+    memory_type: str = "auto"            # auto / buffer / window / summary
+    memory_buffer_turns: int = 6         # auto 模式：轮数 < 此值用 BufferMemory
+    memory_window_turns: int = 20        # auto 模式：轮数 < 此值用 WindowMemory，否则 SummaryMemory
     memory_window_size: int = 10         # WindowMemory 保留轮数
     memory_max_tokens: int = 2000        # SummaryMemory 触发阈值
     memory_recent_keep: int = 6          # SummaryMemory 保留近期条数

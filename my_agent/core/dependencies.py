@@ -116,13 +116,38 @@ def get_react_engine() -> ReActEngine:
     return _react_engine
 
 
-def create_memory(memory_type: str | None = None) -> BaseMemory:
-    """根据 memory_type 创建对应的记忆策略实例。
+def create_memory(memory_type: str | None = None, turn_count: int = 0) -> BaseMemory:
+    """根据 memory_type 和当前对话轮数创建对应的记忆策略实例。
 
     Args:
-        memory_type: "buffer" / "window" / "summary"，为 None 时读取全局配置
+        memory_type: "auto" / "buffer" / "window" / "summary"
+                     为 None 时读取全局配置 settings.memory_type
+        turn_count:  当前会话已有的对话轮数（1轮 = 1条user + 1条assistant）
+                     仅在 auto 模式下生效，用于自动选择策略
+
+    auto 模式升级规则：
+        轮数 < memory_buffer_turns  → BufferMemory  完整历史，精确，适合短对话
+        轮数 < memory_window_turns  → WindowMemory  滑动窗口，省 Token，适合中等对话
+        轮数 >= memory_window_turns → SummaryMemory 摘要压缩，长期记忆，适合长对话
     """
     mt = (memory_type or settings.memory_type).lower()
+
+    if mt == "auto":
+        if turn_count < settings.memory_buffer_turns:
+            resolved = "buffer"
+        elif turn_count < settings.memory_window_turns:
+            resolved = "window"
+        else:
+            resolved = "summary"
+        logger.info(
+            "memory_auto_selected",
+            turn_count=turn_count,
+            resolved=resolved,
+            buffer_threshold=settings.memory_buffer_turns,
+            window_threshold=settings.memory_window_turns,
+        )
+        mt = resolved
+
     if mt == "buffer":
         return BufferMemory()
     if mt == "summary":

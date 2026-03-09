@@ -51,23 +51,28 @@ async def chat_completions(
         session = await s_repo.create()
         session_id = session.id
 
-    # 根据会话的 memory_type 创建对应记忆策略
-    memory = create_memory(session.memory_type)
-
     # 用 history_budget 估算最多需要加载多少条消息，避免无谓地从数据库拉取大量数据
     # 粗略估算：每条消息平均 200 tokens，多拉 50% 作为余量供记忆策略裁剪
     budget = settings.context_budget
     estimated_limit = max(10, int(budget.history_budget / 200 * 1.5))
 
-    # 从数据库加载历史消息，填充到记忆策略中
+    # 从数据库加载历史消息（原始条数）
     raw_history = await m_repo.to_domain_messages(session_id, limit=estimated_limit)
+
+    # 计算当前对话轮数（1轮 = 1条user + 1条assistant，取 user 条数即可）
+    turn_count = sum(1 for msg in raw_history if msg.role.value == "user")
+
+    # 根据会话的 memory_type + 实际轮数，自动选择或使用指定的记忆策略
+    memory = create_memory(session.memory_type, turn_count=turn_count)
+
+    # 将原始历史填充到记忆策略中（window 自动截断，summary 自动压缩）
     for msg in raw_history:
         if msg.role.value == "user":
             await memory.add_user_message(msg.content or "", session_id=session_id)
         elif msg.role.value == "assistant":
             await memory.add_assistant_message(msg.content or "", session_id=session_id)
 
-    # 通过记忆策略获取处理后的历史（window 截断 / summary 压缩）
+    # 通过记忆策略获取处理后的历史
     # react_engine 内部还会用 trim_history_to_budget 做最终精确裁剪
     history = await memory.get_history(session_id=session_id)
 
@@ -202,9 +207,6 @@ async def _stream_react(
         final_answer = f"[异常] {e}"
 
     # 持久化最终 AI 回复
+    # 注意：不在这里手动 commit，由 get_db() 依赖统一在请求结束后 commit
     if final_answer:
         await m_repo.add(session_id, "assistant", final_answer)
-    try:
-        await db.commit()
-    except Exception:
-        pass
