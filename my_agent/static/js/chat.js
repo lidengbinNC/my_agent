@@ -13,21 +13,35 @@ const userInput  = document.getElementById('user-input');
 const sendBtn    = document.getElementById('send-btn');
 const statusEl   = document.getElementById('status-indicator');
 const tokenUsageEl = document.getElementById('token-usage');
+const streamToggle = document.getElementById('stream-toggle');
+const streamModeText = document.getElementById('stream-mode-text');
 
 let isStreaming = false;
+let streamMode = true; // 默认开启流式输出
+
+// 流式开关切换
+streamToggle.addEventListener('change', (e) => {
+    streamMode = e.target.checked;
+    streamModeText.textContent = streamMode ? '流式输出' : '非流式输出';
+});
 
 chatForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const message = userInput.value.trim();
     if (!message || isStreaming) return;
 
-    const welcome = messagesEl.querySelector('.welcome-screen');
+    const welcome = messagesEl.querySelector('.text-center.py-16');
     if (welcome) welcome.remove();
 
     appendUserMessage(message);
     userInput.value = '';
     setStreaming(true);
-    await streamChat(message);
+    
+    if (streamMode) {
+        await streamChat(message);
+    } else {
+        await nonStreamChat(message);
+    }
 });
 
 userInput.addEventListener('keydown', (e) => {
@@ -36,6 +50,39 @@ userInput.addEventListener('keydown', (e) => {
         chatForm.dispatchEvent(new Event('submit'));
     }
 });
+
+// ===== 核心：非流式处理 =====
+
+async function nonStreamChat(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const answerBubble = msgWrapper.querySelector('.answer-bubble');
+
+    try {
+        const resp = await fetch('/api/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, stream: false }),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const data = await resp.json();
+        
+        // 显示最终答案
+        answerBubble.innerHTML = formatMarkdown(data.content || '无响应');
+        answerBubble.classList.remove('hidden');
+        
+        // 显示 Token 使用情况
+        if (data.usage) showTokenUsage(data.usage);
+        
+    } catch (err) {
+        answerBubble.innerHTML = `<span class="text-red-600">❌ 错误: ${escapeHtml(err.message)}</span>`;
+        answerBubble.classList.remove('hidden');
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
 
 // ===== 核心：SSE 流处理 =====
 

@@ -60,6 +60,15 @@ class Settings(BaseSettings):
     max_retries: int = Field(ge=0)
     request_timeout: int = Field(ge=1)
 
+    # --- 数据库（默认 SQLite，可切换 PostgreSQL）---
+    database_url: str = "sqlite+aiosqlite:///./my_agent.db"
+
+    # --- 记忆系统 ---
+    memory_type: str = "window"          # buffer / window / summary
+    memory_window_size: int = 10         # WindowMemory 保留轮数
+    memory_max_tokens: int = 2000        # SummaryMemory 触发阈值
+    memory_recent_keep: int = 6          # SummaryMemory 保留近期条数
+
     @field_validator("llm_api_key", "llm_base_url", "llm_model", "system_prompt")
     @classmethod
     def must_not_be_empty(cls, v: str, info) -> str:

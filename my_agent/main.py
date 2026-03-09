@@ -16,9 +16,10 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
-from my_agent.api.routes import chat, health, tool
+from my_agent.api.routes import chat, health, session, tool
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
+from my_agent.infrastructure.db.database import init_db
 from my_agent.utils.logger import get_logger, setup_logging
 
 BASE_DIR = Path(__file__).parent
@@ -35,6 +36,8 @@ async def lifespan(app: FastAPI):
         port=settings.app_port,
         model=settings.llm_model,
     )
+    await init_db()
+    logger.info("database_initialized")
     yield
     logger = get_logger("shutdown")
     logger.info("app_shutting_down")
@@ -57,6 +60,7 @@ app.add_middleware(TracingMiddleware)
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
 app.include_router(tool.router, prefix="/api/v1")
+app.include_router(session.router, prefix="/api/v1")
 
 # ----- 静态文件 & 模板 -----
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
