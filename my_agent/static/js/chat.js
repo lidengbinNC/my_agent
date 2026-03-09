@@ -15,14 +15,42 @@ const statusEl   = document.getElementById('status-indicator');
 const tokenUsageEl = document.getElementById('token-usage');
 const streamToggle = document.getElementById('stream-toggle');
 const streamModeText = document.getElementById('stream-mode-text');
+const newSessionBtn = document.getElementById('new-session-btn');
 
 let isStreaming = false;
 let streamMode = true; // 默认开启流式输出
+let currentSessionId = null; // 当前会话 ID
 
 // 流式开关切换
 streamToggle.addEventListener('change', (e) => {
     streamMode = e.target.checked;
     streamModeText.textContent = streamMode ? '流式输出' : '非流式输出';
+});
+
+// 新建会话按钮
+newSessionBtn.addEventListener('click', () => {
+    if (isStreaming) return;
+    
+    // 清空当前会话 ID
+    currentSessionId = null;
+    
+    // 清空消息列表
+    messagesEl.innerHTML = `
+        <div class="text-center py-16">
+            <div class="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <span class="text-primary-600 text-2xl font-bold">A</span>
+            </div>
+            <h2 class="text-xl font-semibold text-gray-700 mb-2">欢迎使用 MyAgent</h2>
+            <p class="text-gray-500 text-sm max-w-md mx-auto">
+                智能多 Agent 任务执行平台，支持 ReAct 推理、工具调用、多模型路由。
+            </p>
+        </div>`;
+    
+    // 清空 token 统计
+    tokenUsageEl.textContent = '';
+    
+    // 聚焦输入框
+    userInput.focus();
 });
 
 chatForm.addEventListener('submit', async (e) => {
@@ -61,12 +89,21 @@ async function nonStreamChat(message) {
         const resp = await fetch('/api/v1/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, stream: false }),
+            body: JSON.stringify({ 
+                message, 
+                stream: false,
+                session_id: currentSessionId  // 携带会话 ID
+            }),
         });
 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
         const data = await resp.json();
+        
+        // 保存会话 ID
+        if (data.session_id) {
+            currentSessionId = data.session_id;
+        }
         
         // 显示最终答案
         answerBubble.innerHTML = formatMarkdown(data.content || '无响应');
@@ -97,7 +134,11 @@ async function streamChat(message) {
         const resp = await fetch('/api/v1/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, stream: true }),
+            body: JSON.stringify({ 
+                message, 
+                stream: true,
+                session_id: currentSessionId  // 携带会话 ID
+            }),
         });
 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -140,6 +181,10 @@ async function streamChat(message) {
                             scrollToBottom();
                             break;
                         case 'done':
+                            // 保存会话 ID
+                            if (data.session_id) {
+                                currentSessionId = data.session_id;
+                            }
                             if (data.usage) showTokenUsage(data.usage);
                             break;
                         case 'error':

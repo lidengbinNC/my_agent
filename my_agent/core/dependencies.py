@@ -13,6 +13,7 @@ from my_agent.core.engine.react_engine import ReActEngine
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.model_router import ComplexityLevel, ModelRouter, ModelTier
 from my_agent.domain.llm.openai_client import OpenAIClient
+from my_agent.domain.memory import BaseMemory, BufferMemory, SummaryMemory, WindowMemory
 from my_agent.domain.tool.registry import get_registry
 from my_agent.utils.logger import get_logger
 
@@ -99,17 +100,39 @@ def get_react_engine() -> ReActEngine:
         # 确保内置工具已注册
         import my_agent.domain.tool.builtin  # noqa: F401
 
+        budget = settings.context_budget
         _react_engine = ReActEngine(
             llm=get_llm_client(),
             tool_registry=get_registry(),
             max_iterations=10,
             tool_timeout=30.0,
+            budget=budget,
         )
         logger.info(
             "react_engine_initialized",
             tools=get_registry().names(),
+            **budget.summary(),
         )
     return _react_engine
+
+
+def create_memory(memory_type: str | None = None) -> BaseMemory:
+    """根据 memory_type 创建对应的记忆策略实例。
+
+    Args:
+        memory_type: "buffer" / "window" / "summary"，为 None 时读取全局配置
+    """
+    mt = (memory_type or settings.memory_type).lower()
+    if mt == "buffer":
+        return BufferMemory()
+    if mt == "summary":
+        return SummaryMemory(
+            llm_client=get_llm_client(),
+            max_tokens=settings.memory_max_tokens,
+            recent_keep=settings.memory_recent_keep,
+        )
+    # 默认 window
+    return WindowMemory(window_size=settings.memory_window_size)
 
 
 async def shutdown_clients() -> None:

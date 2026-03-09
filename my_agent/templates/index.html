@@ -29,9 +29,16 @@
             <h1 class="text-lg font-semibold text-gray-800">MyAgent</h1>
             <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">v0.1.0</span>
         </div>
-        <div id="status-indicator" class="flex items-center gap-2 text-sm text-gray-500">
-            <span class="w-2 h-2 bg-green-500 rounded-full"></span>
-            <span>就绪</span>
+        <div class="flex items-center gap-4">
+            <button id="new-session-btn" 
+                    class="text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300"
+                    title="开始新对话">
+                ➕ 新对话
+            </button>
+            <div id="status-indicator" class="flex items-center gap-2 text-sm text-gray-500">
+                <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span>就绪</span>
+            </div>
         </div>
     </header>
 

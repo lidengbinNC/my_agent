@@ -68,6 +68,24 @@ class Settings(BaseSettings):
     memory_window_size: int = 10         # WindowMemory 保留轮数
     memory_max_tokens: int = 2000        # SummaryMemory 触发阈值
     memory_recent_keep: int = 6          # SummaryMemory 保留近期条数
+    
+    # --- 上下文窗口分层预算 ---
+    # 将整个上下文窗口按用途切分，各层在填充阶段就按预算截断
+    #
+    #  ┌─────────────────────────────────────────────┐
+    #  │            max_context_tokens (8192)         │
+    #  ├──────────────┬──────────────────────────────┤
+    #  │ system(1500) │ few_shot(500) │ output(1024)  │
+    #  ├──────────────┴──────────────┴───────────────┤
+    #  │   iteration_budget(800) × N 次迭代           │
+    #  ├──────────────────────────────────────────────┤
+    #  │   history_budget = 剩余（动态计算）           │
+    #  └──────────────────────────────────────────────┘
+    max_context_tokens: int = 8192        # 模型最大上下文窗口
+    ctx_system_budget: int = 1500         # System Prompt + 工具描述预留
+    ctx_few_shot_budget: int = 500        # Few-shot 示例预留
+    ctx_output_budget: int = 1024         # 模型输出预留（不可被输入占用）
+    ctx_iteration_budget: int = 800       # 单次 ReAct 迭代（Thought+Action+Obs）预估
 
     @field_validator("llm_api_key", "llm_base_url", "llm_model", "system_prompt")
     @classmethod
@@ -77,6 +95,18 @@ class Settings(BaseSettings):
         return v
 
     # ----- 衍生配置 -----
+
+    @property
+    def context_budget(self):
+        """返回当前配置对应的 ContextBudget 实例。"""
+        from my_agent.utils.token_counter import build_context_budget
+        return build_context_budget(
+            max_context=self.max_context_tokens,
+            system_budget=self.ctx_system_budget,
+            few_shot_budget=self.ctx_few_shot_budget,
+            output_budget=self.ctx_output_budget,
+            iteration_budget=self.ctx_iteration_budget,
+        )
 
     @property
     def default_llm(self) -> LLMConfig:

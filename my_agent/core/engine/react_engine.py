@@ -30,6 +30,12 @@ from my_agent.domain.prompt.registry import get_prompt_registry
 from my_agent.domain.tool.executor import ToolExecutor
 from my_agent.domain.tool.registry import ToolRegistry
 from my_agent.utils.logger import get_logger
+from my_agent.utils.token_counter import (
+    ContextBudget,
+    build_context_budget,
+    count_messages_tokens,
+    count_tokens,
+)
 
 logger = get_logger(__name__)
 
@@ -84,12 +90,14 @@ class ReActEngine:
         tool_registry: ToolRegistry,
         max_iterations: int = 10,
         tool_timeout: float = 30.0,
+        budget: ContextBudget | None = None,
     ) -> None:
         self._llm = llm
         self._registry = tool_registry
         self._executor = ToolExecutor(tool_registry, timeout=tool_timeout)
         self._max_iterations = max_iterations
         self._prompt_registry = get_prompt_registry()
+        self._budget = budget or build_context_budget()
 
     async def run(
         self,
@@ -112,14 +120,67 @@ class ReActEngine:
             max_iterations=self._max_iterations,
         )
 
-        # 构建消息列表
-        messages: list[Message] = [SystemMessage(system_content)]
-        if history:
-            messages.extend(history)
+        budget = self._budget
 
-        # Few-shot 示例 + 用户问题
+        # ── 第1层：System Prompt（含工具描述）──────────────────────────────
+        system_tokens = count_tokens(system_content)
+        if system_tokens > budget.system_budget:
+            logger.warning(
+                "system_prompt_over_budget",
+                system_tokens=system_tokens,
+                system_budget=budget.system_budget,
+            )
+        messages: list[Message] = [SystemMessage(system_content)]
+
+        # ── 第2层：对话历史（按 history_budget 裁剪）──────────────────────
+        if history:
+            from my_agent.utils.token_counter import trim_history_to_budget
+            trimmed = trim_history_to_budget(history, budget.history_budget)
+            dropped = len(history) - len(trimmed)
+            if dropped > 0:
+                logger.info(
+                    "history_trimmed",
+                    original=len(history),
+                    kept=len(trimmed),
+                    dropped=dropped,
+                    history_budget=budget.history_budget,
+                )
+            messages.extend(trimmed)
+
+        # ── 第3层：Few-shot + 用户问题 ────────────────────────────────────
         few_shot = self._prompt_registry.render("react_few_shot")
-        messages.append(UserMessage(f"{few_shot}\n\n用户问题: {query}"))
+        user_turn = f"{few_shot}\n\n用户问题: {query}"
+        user_tokens = count_tokens(user_turn)
+        if user_tokens > budget.few_shot_budget:
+            logger.warning(
+                "user_turn_over_budget",
+                user_tokens=user_tokens,
+                few_shot_budget=budget.few_shot_budget,
+            )
+        messages.append(UserMessage(user_turn))
+
+        # ── 预算汇总日志 ──────────────────────────────────────────────────
+        total_input_tokens = count_messages_tokens(messages)
+        logger.info(
+            "context_budget_check",
+            **budget.summary(),
+            total_input_tokens=total_input_tokens,
+            remaining=budget.remaining_after(total_input_tokens),
+        )
+
+        # 最终兜底：如果固定层本身就超出总预算（配置错误），直接报错
+        if total_input_tokens > budget.total_input_budget:
+            yield ReActStep(
+                type=ReActStepType.ERROR,
+                error=(
+                    f"上下文超出总输入预算！"
+                    f"当前 {total_input_tokens} tokens，"
+                    f"总输入预算 {budget.total_input_budget} tokens。"
+                    f"请检查 ctx_system_budget / ctx_few_shot_budget 配置。"
+                ),
+                iteration=0,
+            )
+            return
 
         for iteration in range(1, self._max_iterations + 1):
             logger.info("react_iteration", iteration=iteration, query=query[:50])
@@ -205,6 +266,35 @@ class ReActEngine:
             # 将 Observation 注入消息历史
             from my_agent.domain.llm.message import ToolMessage
             messages.append(ToolMessage(content=observation, tool_call_id=tool_call_id))
+
+            # ── 迭代内预算检查：每次注入 Observation 后检查剩余空间 ──────
+            current_tokens = count_messages_tokens(messages)
+            remaining = budget.remaining_after(current_tokens)
+            logger.debug(
+                "iteration_budget_check",
+                iteration=iteration,
+                current_tokens=current_tokens,
+                remaining=remaining,
+                iteration_budget=budget.iteration_budget,
+            )
+            # 剩余空间不足以支撑下一次迭代，提前结束并要求 LLM 给出当前结论
+            if remaining < budget.iteration_budget:
+                logger.warning(
+                    "budget_exhausted_early_stop",
+                    iteration=iteration,
+                    current_tokens=current_tokens,
+                    remaining=remaining,
+                )
+                yield ReActStep(
+                    type=ReActStepType.ERROR,
+                    error=(
+                        f"上下文预算不足，已在第 {iteration} 次迭代后提前终止。"
+                        f"当前已用 {current_tokens} tokens，"
+                        f"剩余 {remaining} tokens 不足以继续推理（需要 {budget.iteration_budget}）。"
+                    ),
+                    iteration=iteration,
+                )
+                return
 
         # 超出最大迭代次数
         yield ReActStep(

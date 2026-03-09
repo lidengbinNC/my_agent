@@ -22,7 +22,8 @@ from my_agent.api.schemas.chat import (
     SSEEvent,
     SSEEventType,
 )
-from my_agent.core.dependencies import get_react_engine
+from my_agent.config.settings import settings
+from my_agent.core.dependencies import create_memory, get_react_engine
 from my_agent.core.engine.react_engine import ReActEngine, ReActStepType
 from my_agent.infrastructure.db.database import get_db
 from my_agent.infrastructure.db.repository import MessageRepository, SessionRepository
@@ -50,8 +51,25 @@ async def chat_completions(
         session = await s_repo.create()
         session_id = session.id
 
-    # 加载历史消息注入记忆
-    history = await m_repo.to_domain_messages(session_id, limit=20)
+    # 根据会话的 memory_type 创建对应记忆策略
+    memory = create_memory(session.memory_type)
+
+    # 用 history_budget 估算最多需要加载多少条消息，避免无谓地从数据库拉取大量数据
+    # 粗略估算：每条消息平均 200 tokens，多拉 50% 作为余量供记忆策略裁剪
+    budget = settings.context_budget
+    estimated_limit = max(10, int(budget.history_budget / 200 * 1.5))
+
+    # 从数据库加载历史消息，填充到记忆策略中
+    raw_history = await m_repo.to_domain_messages(session_id, limit=estimated_limit)
+    for msg in raw_history:
+        if msg.role.value == "user":
+            await memory.add_user_message(msg.content or "", session_id=session_id)
+        elif msg.role.value == "assistant":
+            await memory.add_assistant_message(msg.content or "", session_id=session_id)
+
+    # 通过记忆策略获取处理后的历史（window 截断 / summary 压缩）
+    # react_engine 内部还会用 trim_history_to_budget 做最终精确裁剪
+    history = await memory.get_history(session_id=session_id)
 
     # 持久化用户消息
     await m_repo.add(session_id, "user", req.message)
