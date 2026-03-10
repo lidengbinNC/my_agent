@@ -136,7 +136,7 @@ async def get_default_agent() -> AgentInfo:
 
 
 # ── 运行 ──────────────────────────────────────────────────────────
-
+#TODO 这里开启了 推理模式，会非常慢，不知道有没有优化的方案，这里可以后期思考下
 @router.post("/{agent_id}/run")
 async def run_agent(
     agent_id: str,
