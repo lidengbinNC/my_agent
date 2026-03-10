@@ -1,64 +1,53 @@
-"""网络搜索工具 — 调用 DuckDuckGo 免费搜索 API（无需 Key）。
+"""网络搜索工具 — 使用 ddgs 库实现真实搜索（免费，无需 Key）。
 
 面试考点:
-  - 免费搜索 API 集成（DuckDuckGo Instant Answer API）
-  - httpx 异步 HTTP 请求
+  - ddgs 库（原 duckduckgo-search）：直接调用 DuckDuckGo 搜索，返回真实结果列表
+  - 同步库 + asyncio.to_thread：将阻塞 I/O 放到线程池，不阻塞事件循环
   - 结果摘要截取，避免 Observation 过长
 """
 
 from __future__ import annotations
 
-import httpx
+import asyncio
 
 from my_agent.domain.tool.base import ToolResult
 from my_agent.domain.tool.registry import tool
 
 
-@tool(description="搜索互联网获取实时信息，返回搜索摘要")
-async def web_search(query: str, max_results: int = 3) -> ToolResult:
+@tool(description="搜索互联网获取实时信息，返回真实搜索结果列表")
+async def web_search(query: str, max_results: int = 5) -> ToolResult:
     """搜索互联网获取实时信息。
 
     :param query: 搜索关键词或问题
-    :param max_results: 返回结果数量（默认 3）
+    :param max_results: 返回结果数量（默认 5）
     """
     try:
-        # DuckDuckGo Instant Answer API（免费，无需 Key）
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://api.duckduckgo.com/",
-                params={
-                    "q": query,
-                    "format": "json",
-                    "no_html": "1",
-                    "skip_disambig": "1",
-                },
-                headers={"User-Agent": "MyAgent/0.1"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        from ddgs import DDGS
 
-        results: list[str] = []
+        def _search() -> list[dict]:
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=max_results))
 
-        # Abstract（摘要）
-        if abstract := data.get("AbstractText"):
-            source = data.get("AbstractSource", "")
-            results.append(f"摘要（{source}）: {abstract}")
-
-        # Related Topics
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict) and (text := topic.get("Text")):
-                results.append(f"• {text}")
+        # ddgs 是同步库，放入线程池避免阻塞事件循环
+        results = await asyncio.to_thread(_search)
 
         if not results:
-            # 没有即时答案，返回提示
             return ToolResult.ok(
-                f"未找到关于「{query}」的即时答案。建议使用更具体的关键词重新搜索。"
+                f"未找到关于「{query}」的搜索结果，建议换用更具体的关键词重试。"
             )
 
-        output = f"搜索「{query}」的结果:\n\n" + "\n".join(results)
-        return ToolResult.ok(output)
+        lines: list[str] = [f"搜索「{query}」的结果:\n"]
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "无标题")
+            body  = r.get("body", "")[:300]   # 每条摘要最多 300 字符
+            href  = r.get("href", "")
+            lines.append(f"{i}. **{title}**\n   {body}\n   来源: {href}")
 
-    except httpx.TimeoutException:
-        return ToolResult.fail("搜索请求超时，请稍后重试")
+        return ToolResult.ok("\n\n".join(lines))
+
+    except ImportError:
+        return ToolResult.fail(
+            "ddgs 库未安装，请执行: pip install ddgs"
+        )
     except Exception as e:
         return ToolResult.fail(f"搜索失败: {e}")

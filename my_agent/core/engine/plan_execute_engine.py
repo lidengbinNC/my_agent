@@ -23,6 +23,7 @@ from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.message import SystemMessage, UserMessage
 from my_agent.domain.tool.registry import ToolRegistry
 from my_agent.utils.logger import get_logger
+from my_agent.utils.token_counter import ContextBudget, build_context_budget
 
 logger = get_logger(__name__)
 
@@ -78,10 +79,11 @@ class PlanAndExecuteEngine:
         llm: BaseLLMClient,
         tool_registry: ToolRegistry,
         *,
-        max_plan_steps: int = 8,
+        max_plan_steps: int = 5,
         max_iterations_per_step: int = 5,
         tool_timeout: float = 30.0,
         enable_replanning: bool = True,
+        budget: ContextBudget | None = None,
     ) -> None:
         from my_agent.core.engine.react_engine import ReActEngine
 
@@ -93,6 +95,7 @@ class PlanAndExecuteEngine:
             tool_registry=tool_registry,
             max_iterations=max_iterations_per_step,
             tool_timeout=tool_timeout,
+            budget=budget or build_context_budget(),
         )
         self._step_executor = StepExecutor(self._react_engine)
         self._plan_executor = PlanExecutor(self._step_executor)

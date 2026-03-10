@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from my_agent.config.settings import settings
 from my_agent.core.engine.plan_execute_engine import PlanAndExecuteEngine
 from my_agent.core.engine.react_engine import ReActEngine
 from my_agent.domain.agent.base import AgentConfig, AgentType
@@ -60,6 +61,7 @@ class AgentFactory:
                 max_iterations_per_step=config.max_iterations,
                 tool_timeout=config.tool_timeout,
                 enable_replanning=config.enable_replanning,
+                budget=settings.context_budget,
             )
             logger.info("agent_created", type="plan_execute", name=config.name)
             return engine

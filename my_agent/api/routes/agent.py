@@ -50,7 +50,7 @@ def init_default_agent() -> str:
         description="服务启动时预创建，用于复杂多步骤任务的规划与执行",
         max_iterations=10,
         tool_timeout=30.0,
-        max_plan_steps=8,
+        max_plan_steps=5,
         enable_replanning=True,
     )
     _default_plan_agent_id = agent_id

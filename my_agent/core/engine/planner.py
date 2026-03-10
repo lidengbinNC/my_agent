@@ -22,23 +22,23 @@ logger = get_logger(__name__)
 _PLANNER_SYSTEM = """你是一个任务规划专家。给定一个复杂任务目标，你需要将其拆解为若干可执行的子步骤。
 
 输出格式必须是严格的 JSON，结构如下:
-{
+{{
   "goal": "任务总目标",
   "steps": [
-    {
+    {{
       "step_id": 1,
       "description": "步骤描述（自然语言，说明要做什么）",
       "tool_hint": "建议使用的工具名称，如 calculator / web_search / code_executor，无工具填空字符串",
       "depends_on": []
-    },
-    {
+    }},
+    {{
       "step_id": 2,
       "description": "...",
       "tool_hint": "",
       "depends_on": [1]
-    }
+    }}
   ]
-}
+}}
 
 规则:
 1. 步骤数量控制在 {max_steps} 步以内
@@ -58,15 +58,20 @@ class Planner:
     async def plan(self, goal: str, context: str = "") -> ExecutionPlan:
         """为目标生成执行计划。
 
-        Args:
+       Args:
             goal: 任务目标
             context: 额外背景信息（如对话历史摘要）
 
         Returns:
             ExecutionPlan 对象
         """
-        system_prompt = _PLANNER_SYSTEM.format(max_steps=self._max_steps)
-        user_content = f"任务目标: {goal}"
+        try:
+            system_prompt = _PLANNER_SYSTEM.format(max_steps=self._max_steps)
+            logger.info("prompt_formatted", max_steps=self._max_steps, prompt_length=len(system_prompt))
+        except Exception as e:
+            logger.error("prompt_format_failed", error=str(e), max_steps=self._max_steps)
+            raise
+        user_content = f"任务目标：{goal}"
         if context:
             user_content += f"\n\n背景信息:\n{context}"
 
