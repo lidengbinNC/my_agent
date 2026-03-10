@@ -17,6 +17,7 @@ from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
 from my_agent.api.routes import agent, chat, health, session, tool
+from my_agent.api.routes.agent import init_default_agent
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
 from my_agent.infrastructure.db.database import init_db
@@ -38,6 +39,8 @@ async def lifespan(app: FastAPI):
     )
     await init_db()
     logger.info("database_initialized")
+    default_agent_id = init_default_agent()
+    logger.info("default_plan_agent_created", agent_id=default_agent_id)
     yield
     logger = get_logger("shutdown")
     logger.info("app_shutting_down")

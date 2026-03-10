@@ -32,6 +32,30 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # 内存注册表：agent_id -> AgentConfig（生产环境应持久化到数据库）
 _agent_registry: dict[str, AgentConfig] = {}
 
+# 服务启动时预创建的默认 Plan-and-Execute Agent ID
+_default_plan_agent_id: str | None = None
+
+
+def init_default_agent() -> str:
+    """服务启动时调用，预创建一个默认的 Plan-and-Execute Agent。
+
+    Returns:
+        预创建 Agent 的 ID（全局唯一）
+    """
+    global _default_plan_agent_id
+    agent_id = str(uuid.uuid4())
+    _agent_registry[agent_id] = AgentConfig(
+        agent_type=AgentType.PLAN_AND_EXECUTE,
+        name="深度思考 Agent",
+        description="服务启动时预创建，用于复杂多步骤任务的规划与执行",
+        max_iterations=10,
+        tool_timeout=30.0,
+        max_plan_steps=8,
+        enable_replanning=True,
+    )
+    _default_plan_agent_id = agent_id
+    return agent_id
+
 
 def _get_agent(agent_id: str) -> AgentConfig:
     cfg = _agent_registry.get(agent_id)
@@ -89,6 +113,26 @@ async def delete_agent(agent_id: str) -> None:
     """删除 Agent。"""
     _get_agent(agent_id)
     del _agent_registry[agent_id]
+
+
+@router.get("/default", response_model=AgentInfo)
+async def get_default_agent() -> AgentInfo:
+    """返回服务启动时预创建的默认 Plan-and-Execute Agent 信息。
+
+    前端通过此接口获取 agent_id，用于深度思考模式。
+    """
+    if _default_plan_agent_id is None:
+        raise HTTPException(status_code=503, detail="默认 Agent 尚未初始化，请稍后重试")
+    cfg = _get_agent(_default_plan_agent_id)
+    return AgentInfo(
+        id=_default_plan_agent_id,
+        name=cfg.name,
+        agent_type=cfg.agent_type,
+        description=cfg.description,
+        max_iterations=cfg.max_iterations,
+        max_plan_steps=cfg.max_plan_steps,
+        enable_replanning=cfg.enable_replanning,
+    )
 
 
 # ── 运行 ──────────────────────────────────────────────────────────

@@ -88,6 +88,17 @@
             </form>
             <div class="flex items-center justify-center gap-4 mt-2">
                 <span id="token-usage" class="text-xs text-gray-400"></span>
+                <!-- 深度思考切换 -->
+                <button id="deep-think-btn"
+                        title="开启后使用 Plan-and-Execute 引擎，将任务拆解为多步骤执行，适合复杂问题"
+                        class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all
+                               border-gray-200 text-gray-500 hover:border-violet-300 hover:text-violet-600 hover:bg-violet-50">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.346.346a1 1 0 01-.707.293H9.38a1 1 0 01-.707-.293l-.346-.346z"/>
+                    </svg>
+                    <span id="deep-think-text">深度思考</span>
+                </button>
                 <!-- 流式/非流式切换 -->
                 <label class="stream-toggle-label" title="开启后逐字输出，关闭后等待完整响应">
                     <input type="checkbox" id="stream-toggle" checked>

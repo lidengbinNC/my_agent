@@ -16,10 +16,48 @@ const tokenUsageEl = document.getElementById('token-usage');
 const streamToggle = document.getElementById('stream-toggle');
 const streamModeText = document.getElementById('stream-mode-text');
 const newSessionBtn = document.getElementById('new-session-btn');
+const deepThinkBtn  = document.getElementById('deep-think-btn');
+const deepThinkText = document.getElementById('deep-think-text');
 
 let isStreaming = false;
-let streamMode = true; // 默认开启流式输出
-let currentSessionId = null; // 当前会话 ID
+let streamMode = true;     // 默认开启流式输出
+let deepThinkMode = false; // 默认关闭深度思考
+let currentSessionId = null;
+let defaultPlanAgentId = null; // 服务端预创建的 Plan-and-Execute Agent ID
+
+// 启动时拉取默认 Plan Agent ID
+(async () => {
+    try {
+        const resp = await fetch('/api/v1/agents/default');
+        if (resp.ok) {
+            const data = await resp.json();
+            defaultPlanAgentId = data.id;
+        }
+    } catch (_) {
+        // 网络异常时深度思考按钮将保持禁用
+    }
+    // 拉取完成后才激活深度思考按钮
+    if (!defaultPlanAgentId) {
+        deepThinkBtn.disabled = true;
+        deepThinkBtn.title = '深度思考 Agent 初始化失败';
+        deepThinkBtn.classList.add('opacity-40', 'cursor-not-allowed');
+    }
+})();
+
+// 深度思考切换
+deepThinkBtn.addEventListener('click', () => {
+    if (deepThinkBtn.disabled) return;
+    deepThinkMode = !deepThinkMode;
+    if (deepThinkMode) {
+        deepThinkBtn.classList.remove('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
+        deepThinkBtn.classList.add('border-violet-500', 'text-violet-700', 'bg-violet-50');
+        deepThinkText.textContent = '深度思考 开';
+    } else {
+        deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
+        deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
+        deepThinkText.textContent = '深度思考';
+    }
+});
 
 // 流式开关切换
 streamToggle.addEventListener('change', (e) => {
@@ -30,9 +68,16 @@ streamToggle.addEventListener('change', (e) => {
 // 新建会话按钮
 newSessionBtn.addEventListener('click', () => {
     if (isStreaming) return;
-    
-    // 清空当前会话 ID
+
     currentSessionId = null;
+
+    // 重置深度思考按钮状态
+    if (deepThinkMode) {
+        deepThinkMode = false;
+        deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
+        deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
+        deepThinkText.textContent = '深度思考';
+    }
     
     // 清空消息列表
     messagesEl.innerHTML = `
@@ -64,8 +109,11 @@ chatForm.addEventListener('submit', async (e) => {
     appendUserMessage(message);
     userInput.value = '';
     setStreaming(true);
-    
-    if (streamMode) {
+
+    if (deepThinkMode && defaultPlanAgentId) {
+        // 深度思考：走 Plan-and-Execute 引擎
+        await streamDeepThink(message);
+    } else if (streamMode) {
         await streamChat(message);
     } else {
         await nonStreamChat(message);
@@ -200,6 +248,179 @@ async function streamChat(message) {
         setStreaming(false);
         scrollToBottom();
     }
+}
+
+// ===== 核心：深度思考（Plan-and-Execute）流处理 =====
+
+async function streamDeepThink(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const stepsContainer = msgWrapper.querySelector('.steps-container');
+    const answerBubble   = msgWrapper.querySelector('.answer-bubble');
+
+    // 标记为深度思考模式
+    const badge = document.createElement('div');
+    badge.className = 'flex items-center gap-1.5 text-xs text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-1.5 mb-2';
+    badge.innerHTML = `
+        <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.346.346a1 1 0 01-.707.293H9.38a1 1 0 01-.707-.293l-.346-.346z"/>
+        </svg>
+        <span>深度思考模式 — 正在规划执行计划...</span>`;
+    stepsContainer.appendChild(badge);
+
+    let currentEvent = '';
+
+    try {
+        const resp = await fetch(`/api/v1/agents/${defaultPlanAgentId}/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ goal: message, stream: true }),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let answerContent = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    currentEvent = line.slice(7).trim();
+                } else if (line.startsWith('data: ')) {
+                    let data;
+                    try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+                    switch (currentEvent) {
+                        case 'thinking':
+                            handleDeepThinkThinking(stepsContainer, badge, data);
+                            break;
+                        case 'tool_result':
+                            handleDeepThinkStepDone(stepsContainer, data);
+                            break;
+                        case 'content':
+                            answerContent += data.delta || '';
+                            answerBubble.innerHTML = formatMarkdown(answerContent);
+                            answerBubble.classList.remove('hidden');
+                            scrollToBottom();
+                            break;
+                        case 'done':
+                            break;
+                        case 'error':
+                            appendErrorCard(stepsContainer, data.error || '未知错误');
+                            break;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        appendErrorCard(stepsContainer, err.message);
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+// ===== 深度思考专属事件处理器 =====
+
+function handleDeepThinkThinking(container, badge, data) {
+    const msg = data.message || '';
+
+    // 计划已生成 — 渲染步骤列表
+    if (data.plan && Array.isArray(data.plan)) {
+        badge.querySelector('span').textContent = `深度思考模式 — 计划已生成，共 ${data.plan.length} 步`;
+        const planCard = document.createElement('div');
+        planCard.className = 'border border-violet-200 rounded-xl overflow-hidden mb-2 shadow-sm';
+        planCard.innerHTML = `
+            <button class="step-header w-full flex items-center gap-3 px-4 py-2.5 bg-violet-50 hover:bg-violet-100 transition-colors text-left"
+                    onclick="toggleStep(this)">
+                <span class="text-violet-500 text-sm">📋</span>
+                <div class="flex-1 text-xs font-semibold text-violet-700">执行计划</div>
+                <span class="chevron text-gray-400 text-xs transition-transform">▼</span>
+            </button>
+            <div class="step-body px-4 py-3 bg-white border-t border-violet-100">
+                <ol class="space-y-1.5 text-xs text-gray-700 list-decimal list-inside">
+                    ${data.plan.map(s => `<li><span class="text-gray-500">Step ${s.step_id}:</span> ${escapeHtml(s.description)}</li>`).join('')}
+                </ol>
+            </div>`;
+        container.appendChild(planCard);
+        scrollToBottom();
+        return;
+    }
+
+    // 步骤开始
+    if (data.step_id != null) {
+        let indicator = container.querySelector('.thinking-live');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'thinking-live flex items-center gap-2 text-xs text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 mb-2';
+            indicator.innerHTML = `
+                <div class="flex gap-1">
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:0s"></span>
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:.15s"></span>
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:.3s"></span>
+                </div>
+                <span class="thinking-text"></span>`;
+            container.appendChild(indicator);
+        }
+        indicator.querySelector('.thinking-text').textContent = msg || `Step ${data.step_id} 执行中...`;
+        scrollToBottom();
+        return;
+    }
+
+    // 合成中或其他通用消息
+    if (msg) {
+        let indicator = container.querySelector('.thinking-live');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'thinking-live flex items-center gap-2 text-xs text-violet-600 bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 mb-2';
+            indicator.innerHTML = `
+                <div class="flex gap-1">
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:0s"></span>
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:.15s"></span>
+                    <span class="w-1.5 h-1.5 bg-violet-500 rounded-full animate-bounce" style="animation-delay:.3s"></span>
+                </div>
+                <span class="thinking-text"></span>`;
+            container.appendChild(indicator);
+        }
+        indicator.querySelector('.thinking-text').textContent = msg;
+        scrollToBottom();
+    }
+}
+
+function handleDeepThinkStepDone(container, data) {
+    container.querySelector('.thinking-live')?.remove();
+
+    const card = document.createElement('div');
+    const failed = data.error != null;
+    card.className = 'step-card border rounded-xl overflow-hidden mb-2 shadow-sm ' +
+        (failed ? 'border-red-200' : 'border-green-200');
+    card.innerHTML = `
+        <button class="step-header w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${failed ? 'bg-red-50 hover:bg-red-100' : 'bg-green-50 hover:bg-green-100'}"
+                onclick="toggleStep(this)">
+            <span class="text-sm">${failed ? '❌' : '✅'}</span>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold ${failed ? 'text-red-700' : 'text-green-700'}">Step ${data.step_id ?? ''}</span>
+                    <span class="text-xs text-gray-500 truncate">${escapeHtml(data.desc || '')}</span>
+                </div>
+            </div>
+            <span class="chevron text-gray-400 text-xs transition-transform">▼</span>
+        </button>
+        <div class="step-body hidden px-4 py-3 bg-white border-t ${failed ? 'border-red-100' : 'border-green-100'} text-xs">
+            <div class="font-semibold text-gray-500 mb-1">${failed ? '❌ 错误' : '📤 执行结果'}</div>
+            <pre class="rounded-lg p-2 overflow-x-auto font-mono whitespace-pre-wrap ${failed ? 'bg-red-50 text-red-800' : 'bg-green-50 text-green-800'}">${escapeHtml(data.result || data.error || '')}</pre>
+        </div>`;
+    container.appendChild(card);
+    scrollToBottom();
 }
 
 // ===== 事件处理器 =====
