@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from my_agent.config.settings import settings
+from my_agent.core.agent_factory import AgentFactory
 from my_agent.core.engine.react_engine import ReActEngine
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.model_router import ComplexityLevel, ModelRouter, ModelTier
@@ -158,6 +159,12 @@ def create_memory(memory_type: str | None = None, turn_count: int = 0) -> BaseMe
         )
     # 默认 window
     return WindowMemory(window_size=settings.memory_window_size)
+
+
+def get_agent_factory() -> AgentFactory:
+    """获取 AgentFactory 实例（每次请求复用同一个 LLM + 工具注册表）。"""
+    import my_agent.domain.tool.builtin  # noqa: F401
+    return AgentFactory(llm=get_llm_client(), tool_registry=get_registry())
 
 
 async def shutdown_clients() -> None:
