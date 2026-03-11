@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工作流编排 — MyAgent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* ── 画布 ── */
+        #canvas-wrap {
+            position: relative;
+            overflow: hidden;
+            background-color: #f8fafc;
+            background-image:
+                radial-gradient(circle, #cbd5e1 1px, transparent 1px);
+            background-size: 24px 24px;
+            cursor: grab;
+            user-select: none;
+        }
+        #canvas-wrap.panning { cursor: grabbing; }
+        #canvas-inner {
+            position: absolute;
+            top: 0; left: 0;
+            transform-origin: 0 0;
+        }
+
+        /* ── 节点 ── */
+        .wf-node {
+            position: absolute;
+            width: 160px;
+            border-radius: 12px;
+            border: 2px solid #e2e8f0;
+            background: #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+            cursor: move;
+            transition: box-shadow .15s, border-color .15s;
+        }
+        .wf-node:hover { box-shadow: 0 4px 16px rgba(0,0,0,.14); }
+        .wf-node.selected { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.2); }
+        .wf-node.running  { border-color: #f59e0b; animation: node-pulse 1.2s infinite; }
+        .wf-node.success  { border-color: #10b981; }
+        .wf-node.failed   { border-color: #ef4444; }
+        .wf-node.waiting  { border-color: #f59e0b; }
+        .wf-node.skipped  { border-color: #94a3b8; opacity: .6; }
+
+        @keyframes node-pulse {
+            0%,100% { box-shadow: 0 0 0 0 rgba(245,158,11,.4); }
+            50%      { box-shadow: 0 0 0 6px rgba(245,158,11,0); }
+        }
+
+        .node-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px 8px;
+            border-radius: 10px 10px 0 0;
+        }
+        .node-body {
+            padding: 6px 12px 10px;
+            font-size: 11px;
+            color: #64748b;
+            line-height: 1.4;
+            border-top: 1px solid #f1f5f9;
+        }
+
+        /* 端口（连接点） */
+        .port {
+            position: absolute;
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: #6366f1;
+            border: 2px solid #fff;
+            box-shadow: 0 0 0 2px #6366f1;
+            cursor: crosshair;
+            z-index: 10;
+            transition: transform .15s;
+        }
+        .port:hover { transform: scale(1.4); }
+        .port-out { bottom: -6px; left: 50%; transform: translateX(-50%); }
+        .port-in  { top: -6px;    left: 50%; transform: translateX(-50%); }
+        .port-out:hover { transform: translateX(-50%) scale(1.4); }
+        .port-in:hover  { transform: translateX(-50%) scale(1.4); }
+
+        /* ── 边 SVG ── */
+        #edges-svg {
+            position: absolute;
+            top: 0; left: 0;
+            pointer-events: none;
+            overflow: visible;
+        }
+        .wf-edge { fill: none; stroke: #94a3b8; stroke-width: 2; marker-end: url(#arrow); }
+        .wf-edge.success { stroke: #10b981; }
+        .wf-edge.failure { stroke: #ef4444; }
+        .wf-edge.drawing { stroke: #6366f1; stroke-dasharray: 6 4; }
+
+        /* ── 侧边栏 ── */
+        #sidebar {
+            width: 280px;
+            min-width: 280px;
+            border-left: 1px solid #e2e8f0;
+            background: #fff;
+            overflow-y: auto;
+        }
+
+        /* ── 工作流列表项 ── */
+        .wf-list-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background .12s;
+        }
+        .wf-list-item:hover { background: #f1f5f9; }
+        .wf-list-item.active { background: #eef2ff; }
+
+        /* ── 节点类型调色板 ── */
+        .palette-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1.5px dashed #e2e8f0;
+            cursor: grab;
+            font-size: 12px;
+            color: #475569;
+            transition: background .12s, border-color .12s;
+        }
+        .palette-item:hover { background: #f8fafc; border-color: #6366f1; color: #4f46e5; }
+
+        /* ── 属性面板 ── */
+        .prop-label { font-size: 11px; color: #64748b; margin-bottom: 3px; font-weight: 500; }
+        .prop-input {
+            width: 100%;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 12px;
+            outline: none;
+            transition: border-color .15s;
+        }
+        .prop-input:focus { border-color: #6366f1; }
+
+        /* ── 执行日志 ── */
+        #run-log {
+            font-size: 11px;
+            line-height: 1.6;
+            font-family: 'Menlo', 'Consolas', monospace;
+        }
+        .log-start   { color: #6366f1; }
+        .log-running { color: #f59e0b; }
+        .log-success { color: #10b981; }
+        .log-failed  { color: #ef4444; }
+        .log-waiting { color: #f97316; }
+        .log-skipped { color: #94a3b8; }
+        .log-done    { color: #6366f1; font-weight: 600; }
+
+        /* ── 审批弹窗 ── */
+        #approval-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,.4);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+        }
+        #approval-modal.show { display: flex; }
+
+        /* ── 工具提示 ── */
+        .tooltip {
+            position: absolute;
+            background: #1e293b;
+            color: #fff;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 5px;
+            pointer-events: none;
+            white-space: nowrap;
+            z-index: 9998;
+            opacity: 0;
+            transition: opacity .15s;
+        }
+        .tooltip.show { opacity: 1; }
+    </style>
+</head>
+<body class="h-full bg-gray-50 text-gray-900 flex flex-col" style="height:100vh;overflow:hidden;">
+
+<!-- ── Header ── -->
+<header class="bg-white border-b border-gray-200 px-5 py-2.5 flex items-center justify-between flex-shrink-0 z-20">
+    <div class="flex items-center gap-3">
+        <a href="/" class="flex items-center gap-2 text-gray-500 hover:text-primary-600 transition-colors text-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            <span>返回对话</span>
+        </a>
+        <div class="w-px h-4 bg-gray-200"></div>
+        <div class="w-7 h-7 bg-primary-600 rounded-lg flex items-center justify-center">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+            </svg>
+        </div>
+        <h1 class="text-base font-semibold text-gray-800">工作流编排</h1>
+        <span id="wf-name-badge" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded hidden"></span>
+    </div>
+    <div class="flex items-center gap-2">
+        <!-- 画布工具栏 -->
+        <button id="btn-zoom-in"  title="放大" class="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"/>
+            </svg>
+        </button>
+        <button id="btn-zoom-out" title="缩小" class="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7"/>
+            </svg>
+        </button>
+        <button id="btn-fit"      title="适应画布" class="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+            </svg>
+        </button>
+        <div class="w-px h-4 bg-gray-200 mx-1"></div>
+        <button id="btn-new-wf"
+                class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:border-primary-300 hover:text-primary-600 hover:bg-primary-50 transition-all">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            新建
+        </button>
+        <button id="btn-save-wf"
+                class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-primary-600 text-white hover:bg-primary-700 transition-colors disabled:opacity-50"
+                disabled>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/>
+            </svg>
+            保存
+        </button>
+        <button id="btn-run-wf"
+                class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                disabled>
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            运行
+        </button>
+    </div>
+</header>
+
+<!-- ── 主体三栏布局 ── -->
+<div class="flex flex-1 overflow-hidden">
+
+    <!-- ── 左侧：工作流列表 + 节点调色板 ── -->
+    <div class="w-52 min-w-52 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+        <!-- 工作流列表 -->
+        <div class="px-3 pt-3 pb-2 border-b border-gray-100">
+            <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 px-1">工作流</div>
+            <div id="wf-list" class="space-y-0.5 max-h-48 overflow-y-auto">
+                <div class="text-xs text-gray-400 px-2 py-3 text-center">暂无工作流</div>
+            </div>
+        </div>
+
+        <!-- 节点调色板 -->
+        <div class="px-3 pt-3 flex-1 overflow-y-auto">
+            <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 px-1">节点类型</div>
+            <div class="space-y-2">
+                <div class="palette-item" draggable="true" data-node-type="agent">
+                    <span class="text-base">🤖</span>
+                    <div>
+                        <div class="font-medium text-xs">Agent 节点</div>
+                        <div class="text-gray-400" style="font-size:10px">ReAct 智能推理</div>
+                    </div>
+                </div>
+                <div class="palette-item" draggable="true" data-node-type="tool">
+                    <span class="text-base">⚡</span>
+                    <div>
+                        <div class="font-medium text-xs">工具节点</div>
+                        <div class="text-gray-400" style="font-size:10px">直接调用工具</div>
+                    </div>
+                </div>
+                <div class="palette-item" draggable="true" data-node-type="condition">
+                    <span class="text-base">🔀</span>
+                    <div>
+                        <div class="font-medium text-xs">条件节点</div>
+                        <div class="text-gray-400" style="font-size:10px">条件路由分支</div>
+                    </div>
+                </div>
+                <div class="palette-item" draggable="true" data-node-type="human">
+                    <span class="text-base">👤</span>
+                    <div>
+                        <div class="font-medium text-xs">人工审批</div>
+                        <div class="text-gray-400" style="font-size:10px">Human-in-the-Loop</div>
+                    </div>
+                </div>
+                <div class="palette-item" draggable="true" data-node-type="start">
+                    <span class="text-base">▶</span>
+                    <div>
+                        <div class="font-medium text-xs">开始节点</div>
+                        <div class="text-gray-400" style="font-size:10px">工作流入口</div>
+                    </div>
+                </div>
+                <div class="palette-item" draggable="true" data-node-type="end">
+                    <span class="text-base">⏹</span>
+                    <div>
+                        <div class="font-medium text-xs">结束节点</div>
+                        <div class="text-gray-400" style="font-size:10px">工作流出口</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 预置模板 -->
+            <div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 px-1 mt-4">快速模板</div>
+            <div class="space-y-1.5">
+                <button class="tpl-btn w-full text-left px-3 py-2 rounded-lg border border-dashed border-gray-200 text-xs text-gray-500 hover:border-primary-300 hover:text-primary-600 hover:bg-primary-50 transition-all"
+                        data-tpl="linear">
+                    📋 线性流程
+                </button>
+                <button class="tpl-btn w-full text-left px-3 py-2 rounded-lg border border-dashed border-gray-200 text-xs text-gray-500 hover:border-primary-300 hover:text-primary-600 hover:bg-primary-50 transition-all"
+                        data-tpl="branch">
+                    🔀 条件分支
+                </button>
+                <button class="tpl-btn w-full text-left px-3 py-2 rounded-lg border border-dashed border-gray-200 text-xs text-gray-500 hover:border-primary-300 hover:text-primary-600 hover:bg-primary-50 transition-all"
+                        data-tpl="human_review">
+                    👤 人工审批
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 中间：画布 ── -->
+    <div class="flex-1 flex flex-col overflow-hidden relative">
+        <!-- 画布工具提示 -->
+        <div id="canvas-hint" class="absolute top-3 left-1/2 -translate-x-1/2 z-10 text-xs text-gray-400 bg-white border border-gray-200 rounded-lg px-3 py-1.5 shadow-sm pointer-events-none transition-opacity">
+            从左侧拖拽节点到画布，或选择快速模板开始编排
+        </div>
+
+        <!-- 画布主体 -->
+        <div id="canvas-wrap" class="flex-1">
+            <div id="canvas-inner">
+                <svg id="edges-svg" width="4000" height="3000">
+                    <defs>
+                        <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                            <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+                        </marker>
+                        <marker id="arrow-success" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                            <path d="M0,0 L0,6 L8,3 z" fill="#10b981"/>
+                        </marker>
+                        <marker id="arrow-failure" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                            <path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+
+        <!-- 底部状态栏 -->
+        <div class="flex items-center justify-between px-4 py-1.5 border-t border-gray-200 bg-white text-xs text-gray-400 flex-shrink-0">
+            <div class="flex items-center gap-4">
+                <span id="node-count">节点: 0</span>
+                <span id="edge-count">连线: 0</span>
+                <span id="zoom-level">缩放: 100%</span>
+            </div>
+            <div id="canvas-status" class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 bg-gray-300 rounded-full"></span>
+                <span>就绪</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 右侧：属性面板 + 执行日志 ── -->
+    <div id="sidebar" class="flex flex-col">
+        <!-- Tab 切换 -->
+        <div class="flex border-b border-gray-200 flex-shrink-0">
+            <button class="sidebar-tab flex-1 py-2.5 text-xs font-medium text-primary-600 border-b-2 border-primary-600 transition-colors" data-tab="props">
+                属性
+            </button>
+            <button class="sidebar-tab flex-1 py-2.5 text-xs font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent transition-colors" data-tab="run">
+                执行日志
+            </button>
+            <button class="sidebar-tab flex-1 py-2.5 text-xs font-medium text-gray-500 hover:text-gray-700 border-b-2 border-transparent transition-colors" data-tab="runs">
+                运行历史
+            </button>
+        </div>
+
+        <!-- 属性面板 -->
+        <div id="tab-props" class="flex-1 overflow-y-auto p-4 space-y-4">
+            <!-- 工作流属性 -->
+            <div id="wf-props-section">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">工作流属性</div>
+                <div class="space-y-3">
+                    <div>
+                        <div class="prop-label">名称</div>
+                        <input id="wf-name-input" type="text" class="prop-input" placeholder="输入工作流名称" value="新工作流">
+                    </div>
+                    <div>
+                        <div class="prop-label">描述</div>
+                        <textarea id="wf-desc-input" class="prop-input" rows="2" placeholder="工作流描述（可选）" style="resize:none;field-sizing:unset"></textarea>
+                    </div>
+                    <div>
+                        <div class="prop-label">执行目标</div>
+                        <textarea id="wf-goal-input" class="prop-input" rows="2" placeholder="运行时传入的目标（如：分析Q1销售数据）" style="resize:none;field-sizing:unset"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 节点属性（选中节点时显示） -->
+            <div id="node-props-section" class="hidden">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">节点属性</div>
+                    <button id="btn-delete-node" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors">
+                        删除节点
+                    </button>
+                </div>
+                <div class="space-y-3" id="node-props-form">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 边属性（选中边时显示） -->
+            <div id="edge-props-section" class="hidden">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">连线属性</div>
+                    <button id="btn-delete-edge" class="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors">
+                        删除连线
+                    </button>
+                </div>
+                <div class="space-y-3">
+                    <div>
+                        <div class="prop-label">条件类型</div>
+                        <select id="edge-condition-select" class="prop-input">
+                            <option value="default">default — 无条件</option>
+                            <option value="on_success">on_success — 前节点成功</option>
+                            <option value="on_failure">on_failure — 前节点失败</option>
+                            <option value="expr">expr — 自定义表达式</option>
+                        </select>
+                    </div>
+                    <div id="edge-expr-row" class="hidden">
+                        <div class="prop-label">条件表达式</div>
+                        <input id="edge-expr-input" type="text" class="prop-input" placeholder="如: output contains '成功'">
+                    </div>
+                    <div>
+                        <div class="prop-label">边标签</div>
+                        <input id="edge-label-input" type="text" class="prop-input" placeholder="如: 是 / 否">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 待审批列表 -->
+            <div id="pending-section">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">待人工审批</div>
+                    <button id="btn-refresh-pending" class="text-xs text-primary-600 hover:underline">刷新</button>
+                </div>
+                <div id="pending-list" class="space-y-2">
+                    <div class="text-xs text-gray-400 text-center py-2">暂无待审批项</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 执行日志面板 -->
+        <div id="tab-run" class="flex-1 overflow-y-auto p-4 hidden">
+            <div class="flex items-center justify-between mb-3">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">实时执行日志</div>
+                <button id="btn-clear-log" class="text-xs text-gray-400 hover:text-gray-600">清空</button>
+            </div>
+            <div id="run-log" class="space-y-1 text-xs font-mono">
+                <div class="text-gray-400">等待运行...</div>
+            </div>
+        </div>
+
+        <!-- 运行历史面板 -->
+        <div id="tab-runs" class="flex-1 overflow-y-auto p-4 hidden">
+            <div class="flex items-center justify-between mb-3">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wide">运行历史</div>
+                <button id="btn-refresh-runs" class="text-xs text-primary-600 hover:underline">刷新</button>
+            </div>
+            <div id="runs-list" class="space-y-2">
+                <div class="text-xs text-gray-400 text-center py-2">暂无运行记录</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── 运行目标弹窗 ── -->
+<div id="run-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <h3 class="text-base font-semibold text-gray-800 mb-1">运行工作流</h3>
+        <p class="text-xs text-gray-500 mb-4">输入执行目标，工作流将根据 DAG 顺序依次执行各节点。</p>
+        <div class="mb-4">
+            <div class="prop-label mb-1">执行目标</div>
+            <textarea id="run-goal-input" class="prop-input" rows="3"
+                      placeholder="如：分析2024年Q1销售数据，生成报告并发送给团队"
+                      style="resize:none;field-sizing:unset"></textarea>
+        </div>
+        <div class="flex gap-2 justify-end">
+            <button id="btn-run-cancel" class="px-4 py-2 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors">取消</button>
+            <button id="btn-run-confirm" class="px-4 py-2 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">
+                ▶ 开始运行
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Human-in-the-Loop 审批弹窗 ── -->
+<div id="approval-modal">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                <span class="text-xl">👤</span>
+            </div>
+            <div>
+                <h3 class="text-base font-semibold text-gray-800">需要人工审批</h3>
+                <p class="text-xs text-gray-500">节点执行已暂停，等待您的决策</p>
+            </div>
+        </div>
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
+            <div class="text-xs font-semibold text-amber-700 mb-1">审批内容</div>
+            <div id="approval-content" class="text-xs text-gray-700 leading-relaxed"></div>
+        </div>
+        <div class="mb-4">
+            <div class="prop-label mb-1">审批意见（可选）</div>
+            <textarea id="approval-comment" class="prop-input" rows="2" placeholder="输入审批意见..." style="resize:none;field-sizing:unset"></textarea>
+        </div>
+        <div class="flex gap-2">
+            <button id="btn-reject" class="flex-1 py-2 text-xs rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors font-medium">
+                ✗ 拒绝
+            </button>
+            <button id="btn-approve" class="flex-1 py-2 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors font-medium">
+                ✓ 批准
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ── 工具提示 ── -->
+<div id="tooltip" class="tooltip"></div>
+
+<script src="/static/js/workflow.js"></script>
+</body>
+</html>

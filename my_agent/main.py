@@ -78,6 +78,11 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/workflow", include_in_schema=False)
+async def workflow_page(request: Request):
+    return templates.TemplateResponse("workflow.html", {"request": request})
+
+
 def main() -> None:
     import uvicorn
 
