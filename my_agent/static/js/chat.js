@@ -5,6 +5,7 @@
  *   - fetch + ReadableStream 处理多事件类型 SSE
  *   - 结构化事件解析: thinking / tool_call / tool_result / content / done / error
  *   - 折叠式 Thought/Action/Observation 卡片 UI
+ *   - 多 Agent 协作：中介者模式，每个 Agent 独立颜色区分显示
  */
 
 const messagesEl = document.getElementById('messages');
@@ -18,12 +19,17 @@ const streamModeText = document.getElementById('stream-mode-text');
 const newSessionBtn = document.getElementById('new-session-btn');
 const deepThinkBtn  = document.getElementById('deep-think-btn');
 const deepThinkText = document.getElementById('deep-think-text');
+const multiAgentBtn  = document.getElementById('multi-agent-btn');
+const multiAgentText = document.getElementById('multi-agent-text');
+const scenarioSelect = document.getElementById('scenario-select');
 
 let isStreaming = false;
-let streamMode = true;     // 默认开启流式输出
-let deepThinkMode = false; // 默认关闭深度思考
+let streamMode = true;       // 默认开启流式输出
+let deepThinkMode = false;   // 默认关闭深度思考
+let multiAgentMode = false;  // 多 Agent 协作模式
 let currentSessionId = null;
 let defaultPlanAgentId = null; // 服务端预创建的 Plan-and-Execute Agent ID
+let selectedScenario = 'research_report'; // 默认多 Agent 场景
 
 // 启动时拉取默认 Plan Agent ID
 (async () => {
@@ -52,11 +58,47 @@ deepThinkBtn.addEventListener('click', () => {
         deepThinkBtn.classList.remove('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
         deepThinkBtn.classList.add('border-violet-500', 'text-violet-700', 'bg-violet-50');
         deepThinkText.textContent = '深度思考 开';
+        // 深度思考与多 Agent 互斥
+        if (multiAgentMode) {
+            multiAgentMode = false;
+            multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+            multiAgentBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
+            multiAgentText.textContent = '多 Agent';
+            scenarioSelect.classList.add('hidden');
+        }
     } else {
         deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
         deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
         deepThinkText.textContent = '深度思考';
     }
+});
+
+// 多 Agent 协作模式切换
+multiAgentBtn.addEventListener('click', () => {
+    multiAgentMode = !multiAgentMode;
+    if (multiAgentMode) {
+        multiAgentBtn.classList.remove('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
+        multiAgentBtn.classList.add('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+        multiAgentText.textContent = '多 Agent 开';
+        scenarioSelect.classList.remove('hidden');
+        // 多 Agent 模式与深度思考互斥
+        if (deepThinkMode) {
+            deepThinkMode = false;
+            deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
+            deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
+            deepThinkText.textContent = '深度思考';
+        }
+    } else {
+        multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+        multiAgentBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
+        multiAgentText.textContent = '多 Agent';
+        scenarioSelect.classList.add('hidden');
+    }
+});
+
+// 场景选择变化
+scenarioSelect.addEventListener('change', (e) => {
+    selectedScenario = e.target.value;
 });
 
 // 流式开关切换
@@ -77,6 +119,14 @@ newSessionBtn.addEventListener('click', () => {
         deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
         deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
         deepThinkText.textContent = '深度思考';
+    }
+    // 重置多 Agent 按钮状态
+    if (multiAgentMode) {
+        multiAgentMode = false;
+        multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+        multiAgentBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
+        multiAgentText.textContent = '多 Agent';
+        scenarioSelect.classList.add('hidden');
     }
     
     // 清空消息列表
@@ -110,7 +160,10 @@ chatForm.addEventListener('submit', async (e) => {
     userInput.value = '';
     setStreaming(true);
 
-    if (deepThinkMode && defaultPlanAgentId) {
+    if (multiAgentMode) {
+        // 多 Agent 协作：走 Coordinator 路由
+        await streamMultiAgent(message);
+    } else if (deepThinkMode && defaultPlanAgentId) {
         // 深度思考：走 Plan-and-Execute 引擎
         await streamDeepThink(message);
     } else if (streamMode) {
@@ -327,6 +380,193 @@ async function streamDeepThink(message) {
         setStreaming(false);
         scrollToBottom();
     }
+}
+
+// ===== 核心：多 Agent 协作（Coordinator）流处理 =====
+
+async function streamMultiAgent(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const stepsContainer = msgWrapper.querySelector('.steps-container');
+    const answerBubble   = msgWrapper.querySelector('.answer-bubble');
+
+    // 顶部标记：显示当前场景
+    const scenarioLabels = {
+        research_report: '研究报告生成',
+        data_analysis:   '数据分析',
+        custom:          '自定义协作',
+    };
+    const badge = document.createElement('div');
+    badge.className = 'flex items-center gap-1.5 text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-1.5 mb-2';
+    badge.innerHTML = `
+        <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+        </svg>
+        <span>多 Agent 协作 — ${scenarioLabels[selectedScenario] || selectedScenario}</span>`;
+    stepsContainer.appendChild(badge);
+
+    let currentEvent = '';
+
+    try {
+        const resp = await fetch('/api/v1/multi-agent/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                goal: message,
+                scenario: selectedScenario,
+                mode: selectedScenario === 'data_analysis' ? 'hierarchical' : 'sequential',
+                stream: true,
+            }),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let answerContent = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    currentEvent = line.slice(7).trim();
+                } else if (line.startsWith('data: ')) {
+                    let data;
+                    try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+                    switch (currentEvent) {
+                        case 'thinking':
+                            handleAgentThinking(stepsContainer, data);
+                            break;
+                        case 'tool_result':
+                            handleAgentDone(stepsContainer, data);
+                            break;
+                        case 'content':
+                            answerContent += data.delta || '';
+                            answerBubble.innerHTML = formatMarkdown(answerContent);
+                            answerBubble.classList.remove('hidden');
+                            scrollToBottom();
+                            break;
+                        case 'done':
+                            // 渲染 Agent 颜色图例
+                            if (data.agent_colors && Object.keys(data.agent_colors).length) {
+                                renderAgentLegend(stepsContainer, data.agent_colors);
+                            }
+                            break;
+                        case 'error':
+                            appendErrorCard(stepsContainer, data.error || '未知错误');
+                            break;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        appendErrorCard(stepsContainer, err.message);
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+// ===== 多 Agent 专属事件处理器 =====
+
+/**
+ * 处理 AGENT_START / SYNTHESIZING 的 thinking 事件。
+ * data 中携带 agent、color、message 字段。
+ * 中介者模式：所有消息经 Coordinator 路由，此处按 agent 名称分组显示。
+ */
+function handleAgentThinking(container, data) {
+    container.querySelector('.thinking-live')?.remove();
+
+    const color  = data.color  || '#6B7280';
+    const agent  = data.agent  || '';
+    const msg    = data.message || (agent ? `${agent} 启动中...` : '协调中...');
+
+    const indicator = document.createElement('div');
+    indicator.className = 'thinking-live flex items-center gap-2 text-xs rounded-lg px-3 py-2 mb-2 border';
+    // 用内联样式应用后端分配的动态颜色
+    indicator.style.cssText = `color:${color}; background:${hexToRgba(color, 0.08)}; border-color:${hexToRgba(color, 0.3)};`;
+    indicator.innerHTML = `
+        <div class="flex gap-1">
+            <span class="w-1.5 h-1.5 rounded-full animate-bounce" style="background:${color};animation-delay:0s"></span>
+            <span class="w-1.5 h-1.5 rounded-full animate-bounce" style="background:${color};animation-delay:.15s"></span>
+            <span class="w-1.5 h-1.5 rounded-full animate-bounce" style="background:${color};animation-delay:.3s"></span>
+        </div>
+        ${agent ? `<span class="font-semibold" style="color:${color}">[${agent}]</span>` : ''}
+        <span class="thinking-text" style="color:${color}">${escapeHtml(msg)}</span>`;
+    container.appendChild(indicator);
+    scrollToBottom();
+}
+
+/**
+ * 处理 AGENT_DONE / MESSAGE 的 tool_result 事件。
+ * data 中携带 agent、color、result、message 字段。
+ */
+function handleAgentDone(container, data) {
+    container.querySelector('.thinking-live')?.remove();
+
+    const color  = data.color  || '#6B7280';
+    const agent  = data.agent  || 'Agent';
+    const result = data.result || data.message || '';
+
+    const card = document.createElement('div');
+    card.className = 'step-card rounded-xl overflow-hidden mb-2 shadow-sm border';
+    card.style.borderColor = hexToRgba(color, 0.4);
+    card.innerHTML = `
+        <button class="step-header w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left"
+                style="background:${hexToRgba(color, 0.08)};"
+                onmouseover="this.style.background='${hexToRgba(color, 0.15)}'"
+                onmouseout="this.style.background='${hexToRgba(color, 0.08)}'"
+                onclick="toggleStep(this)">
+            <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background:${color}"></span>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold" style="color:${color}">${escapeHtml(agent)}</span>
+                    <span class="text-xs text-gray-400">完成</span>
+                </div>
+                <div class="text-xs text-gray-500 truncate mt-0.5">${escapeHtml(result.slice(0, 80))}${result.length > 80 ? '…' : ''}</div>
+            </div>
+            <span class="chevron text-gray-400 text-xs transition-transform">▼</span>
+        </button>
+        <div class="step-body hidden px-4 py-3 bg-white border-t text-xs" style="border-color:${hexToRgba(color, 0.2)}">
+            <div class="font-semibold mb-1" style="color:${color}">📤 ${escapeHtml(agent)} 输出</div>
+            <pre class="rounded-lg p-2 overflow-x-auto font-mono whitespace-pre-wrap text-gray-700"
+                 style="background:${hexToRgba(color, 0.06)}">${escapeHtml(result)}</pre>
+        </div>`;
+    container.appendChild(card);
+    scrollToBottom();
+}
+
+/**
+ * 在所有 Agent 完成后，渲染底部颜色图例（Agent 名 → 色块）。
+ */
+function renderAgentLegend(container, agentColors) {
+    const legend = document.createElement('div');
+    legend.className = 'flex flex-wrap gap-2 mt-1 mb-2';
+    for (const [name, color] of Object.entries(agentColors)) {
+        const tag = document.createElement('span');
+        tag.className = 'flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border font-medium';
+        tag.style.cssText = `color:${color}; background:${hexToRgba(color, 0.1)}; border-color:${hexToRgba(color, 0.35)};`;
+        tag.innerHTML = `<span class="w-2 h-2 rounded-full inline-block" style="background:${color}"></span>${escapeHtml(name)}`;
+        legend.appendChild(tag);
+    }
+    container.appendChild(legend);
+    scrollToBottom();
+}
+
+/** 将 hex 颜色转为 rgba 字符串，alpha ∈ [0,1]。 */
+function hexToRgba(hex, alpha) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
 }
 
 // ===== 深度思考专属事件处理器 =====
