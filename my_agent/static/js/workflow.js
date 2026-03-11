@@ -735,6 +735,20 @@ function showNodeProps(nodeId) {
     edgePropsSection.classList.add('hidden');
 
     const cfg = NODE_CONFIG[node.node_type] || NODE_CONFIG.agent;
+
+    // 从最近一次运行里取该节点的输出
+    const lastRun = state._lastRunOutputs?.[node.node_id];
+    const runResultHtml = lastRun ? `
+        <div class="border-t border-gray-100 pt-3 mt-1">
+            <div class="prop-label mb-1">上次运行结果</div>
+            <div class="flex items-center gap-1.5 mb-1.5">
+                <span class="w-2 h-2 rounded-full ${lastRun.status === 'success' ? 'bg-green-500' : lastRun.status === 'failed' ? 'bg-red-500' : 'bg-amber-500'}"></span>
+                <span class="text-xs ${lastRun.status === 'success' ? 'text-green-600' : lastRun.status === 'failed' ? 'text-red-600' : 'text-amber-600'} font-medium">${lastRun.status}</span>
+            </div>
+            ${lastRun.output ? `<pre class="bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs text-gray-700 whitespace-pre-wrap overflow-x-auto max-h-40 overflow-y-auto">${escHtml(lastRun.output)}</pre>` : ''}
+            ${lastRun.error  ? `<pre class="bg-red-50 border border-red-200 rounded-lg p-2 text-xs text-red-700 whitespace-pre-wrap">${escHtml(lastRun.error)}</pre>` : ''}
+        </div>` : '';
+
     nodePropsForm.innerHTML = `
         <div>
             <div class="prop-label">节点名称</div>
@@ -750,7 +764,8 @@ function showNodeProps(nodeId) {
             <div class="prop-label">描述</div>
             <textarea class="prop-input" id="np-desc" rows="2" style="resize:none;field-sizing:unset">${escHtml(node.description)}</textarea>
         </div>
-        ${renderNodeConfigFields(node)}`;
+        ${renderNodeConfigFields(node)}
+        ${runResultHtml}`;
 
     // 绑定通用字段
     document.getElementById('np-name').addEventListener('input', (e) => {
@@ -782,21 +797,38 @@ function renderNodeConfigFields(node) {
                     <div class="prop-label">系统 Prompt</div>
                     <textarea class="prop-input" id="np-prompt" rows="3" placeholder="Agent 的任务指令..." style="resize:none;field-sizing:unset">${escHtml(node.config.prompt || '')}</textarea>
                 </div>`;
-        case 'tool':
+        case 'tool': {
+            const toolName = node.config.tool_name || 'calculator';
+            const toolHints = {
+                calculator:    { placeholder: '{"expression": "2 + 3 * 4"}',   hint: 'expression: 数学表达式字符串，如 "sqrt(16)" / "(100+200)*0.8"' },
+                web_search:    { placeholder: '{"query": "搜索关键词"}',         hint: 'query: 搜索词（必填）；max_results: 返回条数（默认5，可选）' },
+                code_executor: { placeholder: '{"code": "print(1+1)"}',         hint: 'code: Python 代码字符串（支持多行，禁止 os/sys/socket 等危险模块）' },
+                http_get:      { placeholder: '{"url": "https://example.com"}', hint: 'url: 完整 URL（仅支持公网 http/https）' },
+                http_post:     { placeholder: '{"url": "https://api.example.com/data", "body": "{\\"key\\":\\"value\\"}"}', hint: 'url: 请求地址；body: JSON 字符串格式的请求体' },
+            };
+            const hint = toolHints[toolName] || { placeholder: '{}', hint: '参考工具文档填写参数' };
+            const argsVal = JSON.stringify(node.config.tool_args || {}, null, 2);
             return `
                 <div>
                     <div class="prop-label">工具名称</div>
                     <select class="prop-input" id="np-tool-name">
-                        <option value="calculator"  ${node.config.tool_name === 'calculator'  ? 'selected' : ''}>calculator — 数学计算</option>
-                        <option value="web_search"  ${node.config.tool_name === 'web_search'  ? 'selected' : ''}>web_search — 网络搜索</option>
-                        <option value="code_executor" ${node.config.tool_name === 'code_executor' ? 'selected' : ''}>code_executor — 代码执行</option>
-                        <option value="http_request" ${node.config.tool_name === 'http_request' ? 'selected' : ''}>http_request — HTTP 请求</option>
+                        <option value="calculator"    ${toolName === 'calculator'    ? 'selected' : ''}>calculator — 数学计算</option>
+                        <option value="web_search"    ${toolName === 'web_search'    ? 'selected' : ''}>web_search — 网络搜索</option>
+                        <option value="code_executor" ${toolName === 'code_executor' ? 'selected' : ''}>code_executor — 代码执行</option>
+                        <option value="http_get"      ${toolName === 'http_get'      ? 'selected' : ''}>http_get — HTTP GET</option>
+                        <option value="http_post"     ${toolName === 'http_post'     ? 'selected' : ''}>http_post — HTTP POST</option>
                     </select>
                 </div>
                 <div>
                     <div class="prop-label">工具参数（JSON）</div>
-                    <textarea class="prop-input font-mono" id="np-tool-args" rows="3" placeholder="{}" style="resize:none;field-sizing:unset;font-size:11px">${escHtml(JSON.stringify(node.config.tool_args || {}, null, 2))}</textarea>
+                    <textarea class="prop-input font-mono" id="np-tool-args" rows="4"
+                              placeholder="${hint.placeholder}"
+                              style="resize:none;field-sizing:unset;font-size:11px">${escHtml(argsVal === '{}' ? '' : argsVal)}</textarea>
+                    <div id="np-tool-hint" class="mt-1.5 px-2 py-1.5 bg-blue-50 border border-blue-100 rounded-lg text-blue-600 leading-relaxed" style="font-size:10px">
+                        💡 <strong>参数说明：</strong>${hint.hint}
+                    </div>
                 </div>`;
+        }
         case 'condition':
             return `
                 <div>
@@ -835,10 +867,43 @@ function bindNodeConfigEvents(node) {
             bind('np-agent-type', 'agent_type');
             bind('np-prompt', 'prompt');
             break;
-        case 'tool':
-            bind('np-tool-name', 'tool_name');
-            bind('np-tool-args', 'tool_args', v => JSON.parse(v));
+        case 'tool': {
+            const toolHints = {
+                calculator:    { placeholder: '{"expression": "2 + 3 * 4"}',   hint: 'expression: 数学表达式字符串，如 "sqrt(16)" / "(100+200)*0.8"' },
+                web_search:    { placeholder: '{"query": "搜索关键词"}',         hint: 'query: 搜索词（必填）；max_results: 返回条数（默认5，可选）' },
+                code_executor: { placeholder: '{"code": "print(1+1)"}',         hint: 'code: Python 代码字符串（支持多行，禁止 os/sys/socket 等危险模块）' },
+                http_get:      { placeholder: '{"url": "https://example.com"}', hint: 'url: 完整 URL（仅支持公网 http/https）' },
+                http_post:     { placeholder: '{"url": "https://api.example.com/data", "body": "{\\"key\\":\\"value\\"}"}', hint: 'url: 请求地址；body: JSON 字符串格式的请求体' },
+            };
+            const nameEl = document.getElementById('np-tool-name');
+            const argsEl = document.getElementById('np-tool-args');
+            const hintEl = document.getElementById('np-tool-hint');
+            if (nameEl) {
+                nameEl.addEventListener('change', (e) => {
+                    node.config.tool_name = e.target.value;
+                    // 切换工具时清空参数并更新提示
+                    node.config.tool_args = {};
+                    if (argsEl) { argsEl.value = ''; }
+                    const h = toolHints[e.target.value] || { placeholder: '{}', hint: '参考工具文档填写参数' };
+                    if (argsEl) argsEl.placeholder = h.placeholder;
+                    if (hintEl) hintEl.innerHTML = `💡 <strong>参数说明：</strong>${h.hint}`;
+                    markDirty();
+                });
+            }
+            if (argsEl) {
+                argsEl.addEventListener('input', (e) => {
+                    try {
+                        const val = e.target.value.trim();
+                        node.config.tool_args = val ? JSON.parse(val) : {};
+                        argsEl.style.borderColor = '';
+                        markDirty();
+                    } catch (_) {
+                        argsEl.style.borderColor = '#ef4444'; // JSON 格式错误时红框提示
+                    }
+                });
+            }
             break;
+        }
         case 'condition':
             bind('np-cond-expr', 'condition_expr');
             break;
@@ -912,13 +977,14 @@ async function loadWorkflowList() {
 
 async function loadWorkflow(workflowId) {
     try {
-        const resp = await fetch(`/api/v1/workflows/${workflowId}`);
+        const resp = await fetch(`/api/v1/workflows/${workflowId}/detail`);
         if (!resp.ok) return;
         const wf = await resp.json();
 
-        // 这里 API 只返回 WorkflowInfo（无节点详情），需要从 store 获取完整定义
-        // 实际项目中应有 GET /workflows/{id}/detail 端点，此处用已有端点模拟
-        // 暂时只更新元数据，完整节点数据需后端扩展
+        // 清空当前画布
+        clearCanvas();
+
+        // 恢复元数据
         state.workflowId = workflowId;
         state.workflowName = wf.name;
         wfNameInput.value = wf.name;
@@ -928,11 +994,45 @@ async function loadWorkflow(workflowId) {
         btnRunWf.disabled = false;
         btnSaveWf.disabled = false;
 
+        // 恢复节点
+        (wf.nodes || []).forEach(n => {
+            const node = {
+                node_id:     n.node_id,
+                name:        n.name,
+                node_type:   n.node_type,
+                config:      n.config || {},
+                description: n.description || '',
+                position:    { x: n.position?.x ?? 100, y: n.position?.y ?? 100 },
+            };
+            state.nodes.push(node);
+            renderNode(node);
+        });
+
+        // 恢复边
+        (wf.edges || []).forEach(e => {
+            state.edges.push({
+                edge_id:        e.edge_id,
+                source:         e.source,
+                target:         e.target,
+                condition:      e.condition || 'default',
+                condition_expr: e.condition_expr || '',
+                label:          e.label || '',
+            });
+        });
+        renderEdges();
+        updateCounts();
+
         wfList.querySelectorAll('.wf-list-item').forEach(item => {
             item.classList.toggle('active', item.dataset.id === workflowId);
         });
+
+        setTimeout(fitView, 50);
+        hideHint();
         setStatus('已加载', 'green');
-    } catch (_) {}
+        logLine('start', `📂 已加载工作流: ${wf.name}（${wf.nodes.length} 节点 · ${wf.edges.length} 连线）`);
+    } catch (err) {
+        setStatus('加载失败', 'red');
+    }
 }
 
 async function saveWorkflow() {
@@ -1016,7 +1116,8 @@ async function runWorkflow(goal) {
     logLine('start', `▶ 开始运行工作流: ${escHtml(state.workflowName)}`);
     if (goal) logLine('start', `🎯 目标: ${escHtml(goal)}`);
 
-    // 重置节点状态样式
+    // 重置节点状态样式 + 上次运行输出
+    state._lastRunOutputs = {};
     state.nodes.forEach(n => {
         const el = document.getElementById(`node-${n.node_id}`);
         if (el) el.className = 'wf-node';
@@ -1070,7 +1171,6 @@ function handleWorkflowEvent(eventType, data) {
         case 'thinking': {
             const nodeId   = data.node_id;
             const nodeName = data.node_name || nodeId || '';
-            const nodeType = data.node_type || '';
             const msg      = data.message || '';
             const runId    = data.run_id;
 
@@ -1089,43 +1189,140 @@ function handleWorkflowEvent(eventType, data) {
             break;
         }
         case 'tool_result': {
-            const nodeId    = data.node_id;
-            const nodeName  = data.node_name || nodeId || '';
-            const output    = data.output || '';
+            const nodeId     = data.node_id;
+            const nodeName   = data.node_name || nodeId || '';
+            const output     = data.output || '';
             const humanToken = data.human_token;
 
             if (humanToken) {
-                // Human-in-the-Loop 暂停
                 setNodeStatus(nodeId, 'waiting');
-                logLine('waiting', `⏸ [${nodeName}] 等待人工审批 (token: ${humanToken})`);
+                // 存运行状态供属性面板展示
+                if (!state._lastRunOutputs) state._lastRunOutputs = {};
+                state._lastRunOutputs[nodeId] = { status: 'waiting', output, error: '' };
+                logLine('waiting', `⏸ [${nodeName}] 等待人工审批`);
                 showApprovalModal(humanToken, output || data.message || '请审批');
             } else {
                 setNodeStatus(nodeId, 'success');
-                logLine('success', `✅ [${nodeName}] 完成: ${output.slice(0, 80)}${output.length > 80 ? '…' : ''}`);
+                // 存运行状态供属性面板展示
+                if (!state._lastRunOutputs) state._lastRunOutputs = {};
+                state._lastRunOutputs[nodeId] = { status: 'success', output, error: '' };
+                // 展示节点完整输出（折叠卡片）
+                appendNodeOutputCard(nodeId, nodeName, output);
             }
             break;
         }
         case 'content': {
-            // 最终输出片段
-            if (data.delta) {
-                logLine('done', data.delta.replace(/\n/g, ' '));
-            }
+            // 忽略逐块 delta，统一在 done 事件里展示完整输出
             break;
         }
         case 'done': {
-            logLine('done', `✅ 工作流执行完成`);
+            const outputs = data.outputs || {};
+            // 把所有节点输出存入 state，供属性面板点击时展示
+            if (!state._lastRunOutputs) state._lastRunOutputs = {};
+            Object.entries(outputs).forEach(([nid, out]) => {
+                if (!state._lastRunOutputs[nid]) {
+                    state._lastRunOutputs[nid] = { status: 'success', output: out, error: '' };
+                }
+            });
+            logLine('done', '─'.repeat(40));
+            logLine('done', '✅ 工作流执行完成');
+            appendFinalOutputPanel(outputs);
             setStatus('完成', 'green');
             loadRunHistory();
             break;
         }
         case 'error': {
             const nodeId = data.node_id;
-            if (nodeId) setNodeStatus(nodeId, 'failed');
+            if (nodeId) {
+                setNodeStatus(nodeId, 'failed');
+                if (!state._lastRunOutputs) state._lastRunOutputs = {};
+                state._lastRunOutputs[nodeId] = { status: 'failed', output: '', error: data.error || '' };
+            }
             logLine('failed', `❌ 错误: ${data.error || '未知错误'}`);
             setStatus('失败', 'red');
             break;
         }
     }
+}
+
+/** 在执行日志里追加单个节点的输出折叠卡片 */
+function appendNodeOutputCard(nodeId, nodeName, output) {
+    const node = state.nodes.find(n => n.node_id === nodeId);
+    const cfg  = NODE_CONFIG[node?.node_type] || NODE_CONFIG.agent;
+
+    // 简短摘要行（始终可见）
+    const summary = output.length > 60 ? output.slice(0, 60) + '…' : output;
+    logLine('success', `✅ [${nodeName}] ${summary}`);
+
+    if (!output || output.length <= 60) return;
+
+    // 完整输出折叠块
+    const id = `log-card-${nodeId}-${Date.now()}`;
+    const div = document.createElement('div');
+    div.className = 'mt-1 mb-2 border border-green-200 rounded-lg overflow-hidden';
+    div.innerHTML = `
+        <button onclick="toggleLogCard('${id}')"
+                class="w-full flex items-center justify-between px-3 py-1.5 bg-green-50 hover:bg-green-100 transition-colors text-left">
+            <span class="flex items-center gap-1.5 text-green-700 font-medium" style="font-size:11px">
+                <span>${cfg.icon}</span> ${escHtml(nodeName)} 完整输出
+            </span>
+            <span id="${id}-chevron" class="text-gray-400 text-xs transition-transform">▼</span>
+        </button>
+        <div id="${id}" class="hidden px-3 py-2 bg-white border-t border-green-100">
+            <pre class="whitespace-pre-wrap text-gray-700 leading-relaxed" style="font-size:11px">${escHtml(output)}</pre>
+        </div>`;
+    runLog.appendChild(div);
+    runLog.scrollTop = runLog.scrollHeight;
+}
+
+function toggleLogCard(id) {
+    const body    = document.getElementById(id);
+    const chevron = document.getElementById(`${id}-chevron`);
+    if (!body) return;
+    const hidden = body.classList.toggle('hidden');
+    chevron.style.transform = hidden ? '' : 'rotate(180deg)';
+}
+
+/** 工作流完成后，在执行日志底部追加汇总输出面板 */
+function appendFinalOutputPanel(outputs) {
+    const entries = Object.entries(outputs).filter(([, v]) => v && v.trim());
+    if (entries.length === 0) return;
+
+    const panel = document.createElement('div');
+    panel.className = 'mt-3 border border-indigo-200 rounded-xl overflow-hidden';
+    panel.innerHTML = `
+        <div class="px-3 py-2 bg-indigo-50 border-b border-indigo-100 flex items-center gap-2">
+            <span class="text-indigo-600 font-semibold" style="font-size:11px">📋 工作流输出汇总</span>
+            <span class="text-indigo-400" style="font-size:10px">${entries.length} 个节点有输出</span>
+        </div>
+        <div class="divide-y divide-indigo-50">
+            ${entries.map(([nodeId, output]) => {
+                const node = state.nodes.find(n => n.node_id === nodeId);
+                const cfg  = NODE_CONFIG[node?.node_type] || NODE_CONFIG.agent;
+                const name = node?.name || nodeId;
+                const id   = `final-${nodeId}`;
+                return `
+                <div>
+                    <button onclick="toggleLogCard('${id}')"
+                            class="w-full flex items-center justify-between px-3 py-2 bg-white hover:bg-indigo-50 transition-colors text-left">
+                        <span class="flex items-center gap-1.5 text-gray-700 font-medium" style="font-size:11px">
+                            <span>${cfg.icon}</span> ${escHtml(name)}
+                        </span>
+                        <div class="flex items-center gap-2">
+                            <span class="text-gray-400 truncate max-w-24" style="font-size:10px">
+                                ${escHtml(output.slice(0, 30))}${output.length > 30 ? '…' : ''}
+                            </span>
+                            <span id="${id}-chevron" class="text-gray-400 text-xs">▼</span>
+                        </div>
+                    </button>
+                    <div id="${id}" class="hidden px-3 py-2 bg-gray-50 border-t border-indigo-50">
+                        <pre class="whitespace-pre-wrap text-gray-700 leading-relaxed" style="font-size:11px">${escHtml(output)}</pre>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    runLog.appendChild(panel);
+    runLog.scrollTop = runLog.scrollHeight;
 }
 
 function setNodeStatus(nodeId, status) {

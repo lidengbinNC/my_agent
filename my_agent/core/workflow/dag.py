@@ -66,43 +66,6 @@ class DAGSorter:
 
         return order
 
-    def execution_levels(self) -> list[list[str]]:
-        """将节点划分为执行层级：同层内节点可并行，层间有序。
-
-        返回示例：
-            [[start], [node_a, node_b], [node_c], [end]]
-            第 1 层 start 完成后，node_a 和 node_b 可并行执行。
-
-        面试考点：这是 asyncio.gather 并行调度的基础
-        """
-        nodes = {n.node_id for n in self._workflow.nodes}
-        in_degree: dict[str, int] = {n: 0 for n in nodes}
-        adjacency: dict[str, list[str]] = defaultdict(list)
-
-        for edge in self._workflow.edges:
-            if edge.source in nodes and edge.target in nodes:
-                adjacency[edge.source].append(edge.target)
-                in_degree[edge.target] += 1
-
-        levels: list[list[str]] = []
-        current_level = [n for n in nodes if in_degree[n] == 0]
-
-        while current_level:
-            levels.append(sorted(current_level))  # 排序保证确定性
-            next_level: list[str] = []
-            for node_id in current_level:
-                for neighbor in adjacency[node_id]:
-                    in_degree[neighbor] -= 1
-                    if in_degree[neighbor] == 0:
-                        next_level.append(neighbor)
-            current_level = next_level
-
-        total = sum(len(lvl) for lvl in levels)
-        if total != len(nodes):
-            raise CyclicDependencyError("DAG 中存在循环依赖")
-
-        return levels
-
     def get_ready_nodes(self, completed: set[str], all_nodes: set[str]) -> list[str]:
         """返回当前可以执行的节点（前驱全部完成且尚未执行）。
 

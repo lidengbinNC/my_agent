@@ -23,10 +23,13 @@ from fastapi.responses import StreamingResponse
 
 from my_agent.api.schemas.chat import SSEEvent, SSEEventType
 from my_agent.api.schemas.workflow import (
+    EdgeDefResponse,
     HumanApprovalRequest,
     NodeDefRequest,
+    NodeDefResponse,
     NodeRunInfo,
     WorkflowCreateRequest,
+    WorkflowDetail,
     WorkflowInfo,
     WorkflowRunInfo,
     WorkflowRunRequest,
@@ -54,7 +57,7 @@ def _build_engine(factory) -> WorkflowEngine:
     registry = factory._registry
 
     react_engine = ReActEngine(llm=llm, tool_registry=registry, max_iterations=6)
-    tool_exec = ToolExecutor(tool_registry=registry)
+    tool_exec = ToolExecutor(registry=registry)
     exec_registry = NodeExecutorRegistry(
         react_engine=react_engine,
         tool_executor=tool_exec,
@@ -127,6 +130,41 @@ async def list_workflows() -> list[WorkflowInfo]:
         )
         for d in defs
     ]
+
+
+@router.get("/{workflow_id}/detail", response_model=WorkflowDetail)
+async def get_workflow_detail(workflow_id: str) -> WorkflowDetail:
+    """获取工作流完整定义（含节点、边、position），用于前端画布恢复。"""
+    wd = get_workflow_store().get_def(workflow_id)
+    if not wd:
+        raise HTTPException(status_code=404, detail="工作流不存在")
+    return WorkflowDetail(
+        workflow_id=wd.workflow_id,
+        name=wd.name,
+        description=wd.description,
+        nodes=[
+            NodeDefResponse(
+                node_id=n.node_id,
+                name=n.name,
+                node_type=n.node_type.value,
+                config=n.config,
+                description=n.description,
+                position=n.position,
+            )
+            for n in wd.nodes
+        ],
+        edges=[
+            EdgeDefResponse(
+                edge_id=e.edge_id,
+                source=e.source,
+                target=e.target,
+                condition=e.condition.value,
+                condition_expr=e.condition_expr,
+                label=e.label,
+            )
+            for e in wd.edges
+        ],
+    )
 
 
 @router.get("/{workflow_id}", response_model=WorkflowInfo)
