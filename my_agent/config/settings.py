@@ -95,6 +95,19 @@ class Settings(BaseSettings):
     ctx_output_budget: int = 1024         # 模型输出预留（不可被输入占用）
     ctx_iteration_budget: int = 800       # 单次 ReAct 迭代（Thought+Action+Obs）预估
 
+    # --- LangFuse 可观测性（可选）---
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
+    # --- 安全护栏 ---
+    guardrails_enabled: bool = True
+    guardrails_tool_rate_limit: int = 20    # 工具每分钟最大调用次数
+
+    # --- 成本控制 ---
+    daily_budget_usd: float = 5.0
+    cost_exceed_action: str = "warn"        # warn / block
+
     @field_validator("llm_api_key", "llm_base_url", "llm_model", "system_prompt")
     @classmethod
     def must_not_be_empty(cls, v: str, info) -> str:

@@ -11,11 +11,17 @@ from __future__ import annotations
 from my_agent.config.settings import settings
 from my_agent.core.agent_factory import AgentFactory
 from my_agent.core.engine.react_engine import ReActEngine
+from my_agent.domain.guardrails.chain import (
+    build_default_input_chain,
+    build_default_output_chain,
+    build_default_tool_chain,
+)
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.model_router import ComplexityLevel, ModelRouter, ModelTier
 from my_agent.domain.llm.openai_client import OpenAIClient
 from my_agent.domain.memory import BaseMemory, BufferMemory, SummaryMemory, WindowMemory
 from my_agent.domain.tool.registry import get_registry
+from my_agent.utils.cost_tracker import TokenBudget, get_cost_tracker
 from my_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -159,6 +165,26 @@ def create_memory(memory_type: str | None = None, turn_count: int = 0) -> BaseMe
         )
     # 默认 window
     return WindowMemory(window_size=settings.memory_window_size)
+
+
+def get_token_budget() -> TokenBudget:
+    """获取全局 Token 预算管理器。"""
+    return TokenBudget(
+        max_tokens_per_request=settings.max_tokens_per_request,
+        daily_budget_usd=settings.daily_budget_usd,
+        on_exceed=settings.cost_exceed_action,
+    )
+
+
+def get_guardrails():
+    """获取默认护栏链组合（供路由层使用）。"""
+    if not settings.guardrails_enabled:
+        return None, None, None
+    return (
+        build_default_input_chain(),
+        build_default_output_chain(),
+        build_default_tool_chain(),
+    )
 
 
 def get_agent_factory() -> AgentFactory:

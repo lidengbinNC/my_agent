@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
-from my_agent.api.routes import agent, chat, health, multi_agent, session, tool, workflow
+from my_agent.api.routes import agent, chat, health, multi_agent, observability, session, tool, workflow
 from my_agent.api.routes.agent import init_default_agent
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
@@ -45,6 +45,8 @@ async def lifespan(app: FastAPI):
     logger = get_logger("shutdown")
     logger.info("app_shutting_down")
     await shutdown_clients()
+    from my_agent.utils.langfuse_client import get_langfuse_client
+    get_langfuse_client().flush()
 
 
 app = FastAPI(
@@ -67,6 +69,7 @@ app.include_router(session.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")
 app.include_router(multi_agent.router, prefix="/api/v1")
 app.include_router(workflow.router, prefix="/api/v1")
+app.include_router(observability.router, prefix="/api/v1")
 
 # ----- 静态文件 & 模板 -----
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

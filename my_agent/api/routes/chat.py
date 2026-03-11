@@ -23,10 +23,12 @@ from my_agent.api.schemas.chat import (
     SSEEventType,
 )
 from my_agent.config.settings import settings
-from my_agent.core.dependencies import create_memory, get_react_engine
+from my_agent.core.dependencies import create_memory, get_guardrails, get_react_engine
 from my_agent.core.engine.react_engine import ReActEngine, ReActStepType
+from my_agent.domain.guardrails.base import GuardAction
 from my_agent.infrastructure.db.database import get_db
 from my_agent.infrastructure.db.repository import MessageRepository, SessionRepository
+from my_agent.utils.cost_tracker import get_cost_tracker
 
 router = APIRouter(tags=["chat"])
 
@@ -37,6 +39,14 @@ async def chat_completions(
     engine: ReActEngine = Depends(get_react_engine),
     db: AsyncSession = Depends(get_db),
 ):
+    # ── 输入护栏检查 ──────────────────────────────────────────────
+    input_chain, _, _ = get_guardrails()
+    if input_chain:
+        _, guard_result = await input_chain.check(req.message)
+        if guard_result and guard_result.action == GuardAction.BLOCK:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"输入被安全护栏拦截: {guard_result.reason}")
+
     # 获取或创建会话
     session_id = req.session_id
     s_repo = SessionRepository(db)
