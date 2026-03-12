@@ -211,11 +211,11 @@ function showQuickResultModal(result) {
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
                     <p class="text-xs text-gray-400 mb-1">任务完成</p>
-                    <p class="text-sm font-bold ${result.success ? 'text-green-600' : 'text-red-600'}">${result.success ? '✅ 成功' : '❌ 失败'}</p>
+                    <p class="text-sm font-bold ${metrics.task_completed ? 'text-green-600' : 'text-red-600'}">${metrics.task_completed ? '✅ 成功' : '❌ 失败'}</p>
                 </div>
                 <div class="bg-gray-50 rounded-lg p-3">
                     <p class="text-xs text-gray-400 mb-1">耗时</p>
-                    <p class="text-sm font-bold text-gray-700">${(result.elapsed_seconds || 0).toFixed(1)}s</p>
+                    <p class="text-sm font-bold text-gray-700">${(metrics.elapsed_seconds || 0).toFixed(1)}s</p>
                 </div>
             </div>
             ${metrics ? `
@@ -240,7 +240,7 @@ function showQuickResultModal(result) {
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="text-xs text-gray-500">迭代次数</span>
-                        <span class="text-xs font-medium text-gray-700">${metrics.iterations || 0}</span>
+                        <span class="text-xs font-medium text-gray-700">${metrics.total_iterations || 0}</span>
                     </div>
                     <div class="flex items-center justify-between">
                         <span class="text-xs text-gray-500">Token 消耗</span>

@@ -60,10 +60,13 @@ class EvalRunner:
         try:
             if agent_type == AgentTypeLabel.REACT:
                 async for step in self._react_engine.run(task.question):
-                    iterations += 1
+                    prompt_tokens += step.prompt_tokens
+                    completion_tokens += step.completion_tokens
                     if step.type == ReActStepType.ACTION and step.action:
+                        iterations += 1
                         tools_called.append(step.action)
                     elif step.type == ReActStepType.FINAL_ANSWER:
+                        iterations += 1
                         actual_answer = step.answer
                     elif step.type == ReActStepType.ERROR:
                         error = step.error or ""
@@ -99,7 +102,9 @@ class EvalRunner:
         metrics.total_iterations = iterations
         metrics.tools_called = tools_called
         metrics.elapsed_seconds = elapsed
-        # 注：token 统计需要 LLM client 回传，此处简化为 0（可通过 CostTracker 获取）
+        metrics.prompt_tokens = prompt_tokens
+        metrics.completion_tokens = completion_tokens
+        metrics.total_tokens = prompt_tokens + completion_tokens
 
         result = EvalResult(
             task=task,

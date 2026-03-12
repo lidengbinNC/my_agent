@@ -62,6 +62,8 @@ class ReActStep:
     answer: str = ""
     error: str = ""
     iteration: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 @dataclass
@@ -88,7 +90,7 @@ class ReActEngine:
         self,
         llm: BaseLLMClient,
         tool_registry: ToolRegistry,
-        max_iterations: int = 10,
+        max_iterations: int = 5,
         tool_timeout: float = 30.0,
         budget: ContextBudget | None = None,
     ) -> None:
@@ -198,8 +200,10 @@ class ReActEngine:
                 yield ReActStep(type=ReActStepType.ERROR, error=str(e), iteration=iteration)
                 return
 
-            prompt_tokens += response.usage.prompt_tokens
-            completion_tokens += response.usage.completion_tokens
+            step_prompt_tokens = response.usage.prompt_tokens
+            step_completion_tokens = response.usage.completion_tokens
+            prompt_tokens += step_prompt_tokens
+            completion_tokens += step_completion_tokens
 
             raw_output = response.content or ""
             logger.debug("react_llm_output", iteration=iteration, raw=raw_output[:300])
@@ -226,6 +230,8 @@ class ReActEngine:
                     thought=thought,
                     answer=answer,
                     iteration=iteration,
+                    prompt_tokens=step_prompt_tokens,
+                    completion_tokens=step_completion_tokens,
                 )
                 return
 
@@ -236,6 +242,8 @@ class ReActEngine:
                 action=action,
                 action_input=action_input if isinstance(action_input, dict) else {},
                 iteration=iteration,
+                prompt_tokens=step_prompt_tokens,
+                completion_tokens=step_completion_tokens,
             )
 
             # 将 Assistant 消息加入历史（含 tool_calls）
