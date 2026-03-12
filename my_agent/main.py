@@ -19,6 +19,7 @@ from my_agent.api.middleware.tracing import TracingMiddleware
 from my_agent.api.routes import agent, chat, health, multi_agent, observability, session, tool, workflow
 from my_agent.api.routes import tasks as tasks_router
 from my_agent.api.routes import evaluation as eval_router
+from my_agent.api.routes import langgraph_routes
 from my_agent.api.routes.agent import init_default_agent
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
@@ -82,6 +83,7 @@ app.include_router(workflow.router, prefix="/api/v1")
 app.include_router(observability.router, prefix="/api/v1")
 app.include_router(tasks_router.router, prefix="/api/v1")
 app.include_router(eval_router.router, prefix="/api/v1")
+app.include_router(langgraph_routes.router, prefix="/api/v1")
 
 # ----- 静态文件 & 模板 -----
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
