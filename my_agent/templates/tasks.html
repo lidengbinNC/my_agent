@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyAgent - 任务队列</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-gray-50 text-gray-900 flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+                <span class="text-white font-bold text-sm">A</span>
+            </div>
+            <h1 class="text-lg font-semibold text-gray-800">MyAgent</h1>
+            <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">v0.1.0</span>
+        </div>
+        <nav class="flex items-center gap-2">
+            <a href="/"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                对话
+            </a>
+            <a href="/workflow"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                </svg>
+                工作流
+            </a>
+            <a href="/evaluation"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                评估
+            </a>
+            <a href="/tasks"
+               class="flex items-center gap-1.5 text-xs text-white bg-primary-600 px-3 py-1.5 rounded-lg border border-primary-600">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                </svg>
+                任务队列
+            </a>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-hidden flex flex-col">
+
+        <!-- Stats Bar -->
+        <div class="bg-white border-b border-gray-200 px-6 py-4">
+            <div class="flex items-center gap-6">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-500">总任务</span>
+                    <span id="stat-total" class="text-lg font-bold text-gray-800">—</span>
+                </div>
+                <div class="w-px h-6 bg-gray-200"></div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-yellow-400"></span>
+                    <span class="text-xs text-gray-500">等待中</span>
+                    <span id="stat-pending" class="text-sm font-semibold text-yellow-600">—</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                    <span class="text-xs text-gray-500">执行中</span>
+                    <span id="stat-running" class="text-sm font-semibold text-blue-600">—</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                    <span class="text-xs text-gray-500">已完成</span>
+                    <span id="stat-completed" class="text-sm font-semibold text-green-600">—</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                    <span class="text-xs text-gray-500">失败</span>
+                    <span id="stat-failed" class="text-sm font-semibold text-red-600">—</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-gray-400"></span>
+                    <span class="text-xs text-gray-500">已取消</span>
+                    <span id="stat-cancelled" class="text-sm font-semibold text-gray-500">—</span>
+                </div>
+                <div class="ml-auto flex items-center gap-2">
+                    <button id="refresh-btn"
+                            class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                        </svg>
+                        刷新
+                    </button>
+                    <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+                        <input type="checkbox" id="auto-refresh" checked class="rounded">
+                        自动刷新
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="flex-1 overflow-hidden flex">
+
+            <!-- Task List -->
+            <div class="flex-1 flex flex-col overflow-hidden">
+                <!-- Filter Bar -->
+                <div class="bg-white border-b border-gray-100 px-6 py-2.5 flex items-center gap-3">
+                    <span class="text-xs text-gray-500">状态筛选：</span>
+                    <div class="flex gap-1" id="status-filters">
+                        <button data-status="" class="status-filter-btn active text-xs px-3 py-1 rounded-full border border-primary-300 bg-primary-50 text-primary-700 transition-colors">
+                            全部
+                        </button>
+                        <button data-status="pending" class="status-filter-btn text-xs px-3 py-1 rounded-full border border-gray-200 text-gray-600 hover:border-yellow-300 hover:bg-yellow-50 hover:text-yellow-700 transition-colors">
+                            等待中
+                        </button>
+                        <button data-status="running" class="status-filter-btn text-xs px-3 py-1 rounded-full border border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-colors">
+                            执行中
+                        </button>
+                        <button data-status="completed" class="status-filter-btn text-xs px-3 py-1 rounded-full border border-gray-200 text-gray-600 hover:border-green-300 hover:bg-green-50 hover:text-green-700 transition-colors">
+                            已完成
+                        </button>
+                        <button data-status="failed" class="status-filter-btn text-xs px-3 py-1 rounded-full border border-gray-200 text-gray-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700 transition-colors">
+                            失败
+                        </button>
+                    </div>
+                    <span id="task-count" class="ml-auto text-xs text-gray-400"></span>
+                </div>
+
+                <!-- Task Table -->
+                <div class="flex-1 overflow-auto px-6 py-4">
+                    <table class="w-full text-xs">
+                        <thead>
+                            <tr class="border-b border-gray-200">
+                                <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-56">任务 ID</th>
+                                <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-28">类型</th>
+                                <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-24">状态</th>
+                                <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-48">进度</th>
+                                <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-32">创建时间</th>
+                                <th class="text-left pb-3 font-semibold text-gray-500 w-24">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tasks-tbody" class="divide-y divide-gray-100">
+                            <tr>
+                                <td colspan="6" class="py-12 text-center text-gray-400">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Right Panel: Task Detail -->
+            <aside class="w-80 bg-white border-l border-gray-200 flex flex-col overflow-hidden flex-shrink-0">
+                <div class="px-4 py-3 border-b border-gray-100">
+                    <h2 class="text-sm font-semibold text-gray-700">任务详情</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">点击任务行查看详情</p>
+                </div>
+
+                <!-- Empty State -->
+                <div id="detail-empty" class="flex-1 flex flex-col items-center justify-center text-gray-400 p-6">
+                    <svg class="w-10 h-10 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                    </svg>
+                    <p class="text-sm">选择一个任务</p>
+                    <p class="text-xs mt-1 text-center">点击左侧任务行查看详细信息和实时进度</p>
+                </div>
+
+                <!-- Detail Content -->
+                <div id="detail-content" class="hidden flex-1 flex flex-col overflow-hidden">
+                    <!-- Task Info -->
+                    <div class="p-4 border-b border-gray-100 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span id="detail-status-badge" class="text-xs px-2 py-0.5 rounded-full font-medium"></span>
+                            <button id="detail-cancel-btn"
+                                    class="hidden text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded-lg transition-colors border border-red-200">
+                                取消任务
+                            </button>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400">任务 ID</p>
+                            <p id="detail-task-id" class="text-xs font-mono text-gray-700 break-all mt-0.5"></p>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <p class="text-xs text-gray-400">类型</p>
+                                <p id="detail-type" class="text-xs text-gray-700 mt-0.5"></p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-400">优先级</p>
+                                <p id="detail-priority" class="text-xs text-gray-700 mt-0.5"></p>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400">创建时间</p>
+                            <p id="detail-created-at" class="text-xs text-gray-700 mt-0.5"></p>
+                        </div>
+                        <div id="detail-progress-bar-wrap" class="hidden">
+                            <p class="text-xs text-gray-400 mb-1">进度</p>
+                            <div class="w-full bg-gray-100 rounded-full h-1.5">
+                                <div id="detail-progress-bar" class="bg-primary-600 h-1.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                            <p id="detail-progress-msg" class="text-xs text-gray-500 mt-1"></p>
+                        </div>
+                    </div>
+
+                    <!-- WebSocket Log -->
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        <div class="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
+                            <span class="text-xs font-medium text-gray-600">实时日志</span>
+                            <span id="ws-status" class="text-xs text-gray-400"></span>
+                        </div>
+                        <div id="ws-log" class="flex-1 overflow-y-auto p-3 space-y-1.5 font-mono text-xs text-gray-600 bg-gray-50">
+                            <div class="text-gray-400 text-center py-4">等待连接...</div>
+                        </div>
+                    </div>
+
+                    <!-- Result Preview -->
+                    <div id="detail-result-wrap" class="hidden border-t border-gray-100">
+                        <div class="px-4 py-2 flex items-center justify-between">
+                            <span class="text-xs font-medium text-gray-600">执行结果</span>
+                            <button id="detail-view-result-btn"
+                                    class="text-xs text-primary-600 hover:underline">
+                                查看完整结果
+                            </button>
+                        </div>
+                        <div id="detail-result-preview" class="px-4 pb-3 text-xs text-gray-600 line-clamp-3"></div>
+                    </div>
+                </div>
+            </aside>
+
+        </div>
+    </main>
+
+    <!-- Result Detail Modal -->
+    <div id="result-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <h3 class="text-base font-semibold text-gray-800">任务完整结果</h3>
+                <button id="close-result-modal" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div id="result-modal-body" class="flex-1 overflow-auto p-6">
+                <pre class="text-xs text-gray-700 whitespace-pre-wrap break-all bg-gray-50 rounded-lg p-4"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="hidden fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-gray-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg max-w-sm">
+        <span id="toast-icon"></span>
+        <span id="toast-msg"></span>
+    </div>
+
+    <script src="/static/js/tasks.js"></script>
+</body>
+</html>

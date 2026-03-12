@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyAgent - Agent 评估中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="h-full bg-gray-50 text-gray-900 flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+                <span class="text-white font-bold text-sm">A</span>
+            </div>
+            <h1 class="text-lg font-semibold text-gray-800">MyAgent</h1>
+            <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">v0.1.0</span>
+        </div>
+        <nav class="flex items-center gap-2">
+            <a href="/"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                </svg>
+                对话
+            </a>
+            <a href="/workflow"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                </svg>
+                工作流
+            </a>
+            <a href="/evaluation"
+               class="flex items-center gap-1.5 text-xs text-white bg-primary-600 px-3 py-1.5 rounded-lg border border-primary-600">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                评估
+            </a>
+            <a href="/tasks"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                </svg>
+                任务队列
+            </a>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 overflow-hidden flex">
+
+        <!-- Left Panel: Dataset + Controls -->
+        <aside class="w-80 bg-white border-r border-gray-200 flex flex-col overflow-hidden flex-shrink-0">
+            <!-- Panel Header -->
+            <div class="px-4 py-3 border-b border-gray-100">
+                <h2 class="text-sm font-semibold text-gray-700">评估控制台</h2>
+                <p class="text-xs text-gray-400 mt-0.5">配置并提交评估任务</p>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+
+                <!-- Quick Eval -->
+                <section class="space-y-2">
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">快速评估（同步）</h3>
+                    <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
+                        直接运行单个评估任务，同步等待结果（适合调试）
+                    </div>
+                    <div class="space-y-2">
+                        <label class="block text-xs text-gray-600">选择任务</label>
+                        <select id="quick-task-select"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="">加载中...</option>
+                        </select>
+                        <label class="block text-xs text-gray-600">Agent 类型</label>
+                        <select id="quick-agent-type"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="react">ReAct</option>
+                            <option value="plan_execute">Plan-and-Execute</option>
+                        </select>
+                        <button id="quick-eval-btn"
+                                class="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                            </svg>
+                            立即评估
+                        </button>
+                    </div>
+                </section>
+
+                <hr class="border-gray-100">
+
+                <!-- Batch Eval -->
+                <section class="space-y-2">
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">批量评估（异步）</h3>
+                    <div class="space-y-2">
+                        <label class="block text-xs text-gray-600">难度筛选</label>
+                        <select id="batch-difficulty"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="">全部难度</option>
+                            <option value="easy">简单</option>
+                            <option value="medium">中等</option>
+                            <option value="hard">困难</option>
+                        </select>
+                        <label class="block text-xs text-gray-600">类别筛选</label>
+                        <select id="batch-category"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="">全部类别</option>
+                            <option value="math">数学</option>
+                            <option value="knowledge">知识问答</option>
+                            <option value="code">代码</option>
+                        </select>
+                        <label class="block text-xs text-gray-600">任务数量上限</label>
+                        <input type="number" id="batch-limit" value="10" min="1" max="22"
+                               class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500">
+                        <label class="block text-xs text-gray-600">Agent 类型</label>
+                        <select id="batch-agent-type"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="react">ReAct</option>
+                            <option value="plan_execute">Plan-and-Execute</option>
+                        </select>
+                        <button id="batch-eval-btn"
+                                class="w-full bg-primary-600 hover:bg-primary-700 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+                            </svg>
+                            提交批量评估
+                        </button>
+                    </div>
+                </section>
+
+                <hr class="border-gray-100">
+
+                <!-- Compare Eval -->
+                <section class="space-y-2">
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">对比评估</h3>
+                    <div class="bg-violet-50 border border-violet-200 rounded-lg p-3 text-xs text-violet-700">
+                        ReAct vs Plan-and-Execute 在同一数据集上的表现对比
+                    </div>
+                    <div class="space-y-2">
+                        <label class="block text-xs text-gray-600">难度</label>
+                        <select id="compare-difficulty"
+                                class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                            <option value="easy">简单</option>
+                            <option value="medium">中等</option>
+                            <option value="hard">困难</option>
+                        </select>
+                        <label class="block text-xs text-gray-600">任务数量</label>
+                        <input type="number" id="compare-limit" value="5" min="1" max="10"
+                               class="w-full text-xs border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500">
+                        <button id="compare-eval-btn"
+                                class="w-full bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                            </svg>
+                            提交对比评估
+                        </button>
+                    </div>
+                </section>
+
+            </div>
+        </aside>
+
+        <!-- Center: Dataset Table + Results -->
+        <div class="flex-1 flex flex-col overflow-hidden">
+
+            <!-- Tabs -->
+            <div class="bg-white border-b border-gray-200 px-6 flex items-center gap-1">
+                <button data-tab="dataset"
+                        class="eval-tab active text-sm px-4 py-3 border-b-2 border-primary-600 text-primary-600 font-medium transition-colors">
+                    数据集
+                </button>
+                <button data-tab="results"
+                        class="eval-tab text-sm px-4 py-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+                    评估结果
+                </button>
+                <button data-tab="compare"
+                        class="eval-tab text-sm px-4 py-3 border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition-colors">
+                    对比报告
+                </button>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="flex-1 overflow-hidden">
+
+                <!-- Dataset Tab -->
+                <div id="tab-dataset" class="h-full flex flex-col">
+                    <!-- Filter Bar -->
+                    <div class="bg-white border-b border-gray-100 px-6 py-3 flex items-center gap-3">
+                        <span class="text-xs text-gray-500">筛选：</span>
+                        <select id="ds-difficulty-filter"
+                                class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 bg-white">
+                            <option value="">全部难度</option>
+                            <option value="easy">简单</option>
+                            <option value="medium">中等</option>
+                            <option value="hard">困难</option>
+                        </select>
+                        <select id="ds-category-filter"
+                                class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary-500 bg-white">
+                            <option value="">全部类别</option>
+                            <option value="math">数学</option>
+                            <option value="knowledge">知识问答</option>
+                            <option value="code">代码</option>
+                        </select>
+                        <button id="ds-filter-btn"
+                                class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg transition-colors">
+                            刷新
+                        </button>
+                        <span id="ds-count" class="ml-auto text-xs text-gray-400"></span>
+                    </div>
+                    <!-- Table -->
+                    <div class="flex-1 overflow-auto px-6 py-4">
+                        <table class="w-full text-xs">
+                            <thead>
+                                <tr class="border-b border-gray-200">
+                                    <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-32">任务 ID</th>
+                                    <th class="text-left pb-3 pr-4 font-semibold text-gray-500">问题</th>
+                                    <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-20">难度</th>
+                                    <th class="text-left pb-3 pr-4 font-semibold text-gray-500 w-24">类别</th>
+                                    <th class="text-left pb-3 font-semibold text-gray-500 w-40">期望工具</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dataset-tbody" class="divide-y divide-gray-100">
+                                <tr>
+                                    <td colspan="5" class="py-8 text-center text-gray-400">加载中...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Results Tab -->
+                <div id="tab-results" class="h-full flex flex-col hidden">
+                    <div class="flex-1 overflow-auto px-6 py-4">
+                        <div id="results-empty" class="flex flex-col items-center justify-center h-full text-gray-400">
+                            <svg class="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                            </svg>
+                            <p class="text-sm">暂无评估结果</p>
+                            <p class="text-xs mt-1">提交评估任务后，结果将显示在这里</p>
+                        </div>
+                        <div id="results-content" class="hidden space-y-4"></div>
+                    </div>
+                </div>
+
+                <!-- Compare Tab -->
+                <div id="tab-compare" class="h-full flex flex-col hidden">
+                    <div class="flex-1 overflow-auto px-6 py-4">
+                        <div id="compare-empty" class="flex flex-col items-center justify-center h-full text-gray-400">
+                            <svg class="w-12 h-12 mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                                      d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                            </svg>
+                            <p class="text-sm">暂无对比报告</p>
+                            <p class="text-xs mt-1">提交对比评估任务后，报告将显示在这里</p>
+                        </div>
+                        <div id="compare-content" class="hidden space-y-6"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Right Panel: Task Progress -->
+        <aside class="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden flex-shrink-0">
+            <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                    <h2 class="text-sm font-semibold text-gray-700">任务进度</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">实时推送（WebSocket）</p>
+                </div>
+                <a href="/tasks" class="text-xs text-primary-600 hover:underline">查看全部</a>
+            </div>
+            <div id="task-progress-list" class="flex-1 overflow-y-auto p-3 space-y-2">
+                <div class="text-center text-xs text-gray-400 py-8">
+                    提交任务后，进度将在这里实时显示
+                </div>
+            </div>
+        </aside>
+
+    </main>
+
+    <!-- Quick Eval Result Modal -->
+    <div id="quick-result-modal" class="hidden fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <h3 class="text-base font-semibold text-gray-800">快速评估结果</h3>
+                <button id="close-quick-modal" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div id="quick-result-body" class="flex-1 overflow-auto p-6"></div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="hidden fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-gray-900 text-white text-sm px-4 py-3 rounded-xl shadow-lg max-w-sm">
+        <span id="toast-icon"></span>
+        <span id="toast-msg"></span>
+    </div>
+
+    <script src="/static/js/evaluation.js"></script>
+</body>
+</html>

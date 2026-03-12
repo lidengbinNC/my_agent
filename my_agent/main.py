@@ -17,10 +17,14 @@ from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
 from my_agent.api.routes import agent, chat, health, multi_agent, observability, session, tool, workflow
+from my_agent.api.routes import tasks as tasks_router
+from my_agent.api.routes import evaluation as eval_router
 from my_agent.api.routes.agent import init_default_agent
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import shutdown_clients
 from my_agent.infrastructure.db.database import init_db
+from my_agent.tasks.handlers import register_all_handlers
+from my_agent.tasks.queue import get_task_queue
 from my_agent.utils.logger import get_logger, setup_logging
 
 BASE_DIR = Path(__file__).parent
@@ -41,9 +45,15 @@ async def lifespan(app: FastAPI):
     logger.info("database_initialized")
     default_agent_id = init_default_agent()
     logger.info("default_plan_agent_created", agent_id=default_agent_id)
+    # 启动异步任务队列
+    queue = get_task_queue()
+    register_all_handlers(queue)
+    await queue.start()
+    logger.info("task_queue_started")
     yield
     logger = get_logger("shutdown")
     logger.info("app_shutting_down")
+    await queue.stop()
     await shutdown_clients()
     from my_agent.utils.langfuse_client import get_langfuse_client
     get_langfuse_client().flush()
@@ -70,6 +80,8 @@ app.include_router(agent.router, prefix="/api/v1")
 app.include_router(multi_agent.router, prefix="/api/v1")
 app.include_router(workflow.router, prefix="/api/v1")
 app.include_router(observability.router, prefix="/api/v1")
+app.include_router(tasks_router.router, prefix="/api/v1")
+app.include_router(eval_router.router, prefix="/api/v1")
 
 # ----- 静态文件 & 模板 -----
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -84,6 +96,16 @@ async def index(request: Request):
 @app.get("/workflow", include_in_schema=False)
 async def workflow_page(request: Request):
     return templates.TemplateResponse("workflow.html", {"request": request})
+
+
+@app.get("/evaluation", include_in_schema=False)
+async def evaluation_page(request: Request):
+    return templates.TemplateResponse("evaluation.html", {"request": request})
+
+
+@app.get("/tasks", include_in_schema=False)
+async def tasks_page(request: Request):
+    return templates.TemplateResponse("tasks.html", {"request": request})
 
 
 def main() -> None:

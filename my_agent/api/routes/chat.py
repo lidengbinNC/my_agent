@@ -40,7 +40,8 @@ async def chat_completions(
     db: AsyncSession = Depends(get_db),
 ):
     # ── 输入护栏检查 ──────────────────────────────────────────────
-    input_chain, _, _ = get_guardrails()
+    # output_chain 用于最终回复 PII 脱敏等，流式/非流式路径内使用
+    input_chain, output_chain, _ = get_guardrails()
     if input_chain:
         _, guard_result = await input_chain.check(req.message)
         if guard_result and guard_result.action == GuardAction.BLOCK:
@@ -91,7 +92,7 @@ async def chat_completions(
 
     if req.stream:
         return StreamingResponse(
-            _stream_react(engine, req.message, session_id, history, db),
+            _stream_react(engine, req.message, session_id, history, db, output_chain),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -108,7 +109,11 @@ async def chat_completions(
         elif step.type == ReActStepType.ERROR:
             final_answer = f"[错误] {step.error}"
 
-    # 持久化 AI 回复
+    # 输出护栏：PII 脱敏等（MODIFY 后放行）
+    if output_chain and final_answer:
+        final_answer, _ = await output_chain.check(final_answer)
+
+    # 持久化 AI 回复（已脱敏后的内容写入 DB，避免泄露）
     await m_repo.add(session_id, "assistant", final_answer)
 
     return ChatResponse(
@@ -124,6 +129,7 @@ async def _stream_react(
     session_id: str,
     history: list,
     db: AsyncSession,
+    output_chain=None,
 ) -> AsyncGenerator[str, None]:
     """将 ReAct 步骤转换为 SSE 事件流，并持久化对话记录。"""
     m_repo = MessageRepository(db)
@@ -188,6 +194,9 @@ async def _stream_react(
                         data={"iteration": step.iteration, "message": step.thought},
                     ).to_sse()
                 answer = step.answer
+                # 输出护栏：整段脱敏后再推送与持久化（需完整文本才能正确匹配 PII 正则）
+                if output_chain and answer:
+                    answer, _ = await output_chain.check(answer)
                 final_answer = answer
                 chunk_size = 10
                 for i in range(0, len(answer), chunk_size):
