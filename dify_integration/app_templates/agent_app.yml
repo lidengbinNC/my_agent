@@ -1,0 +1,92 @@
+# Dify Agent 应用配置模板（DSL 格式）
+#
+# 导入方式：Dify 控制台 → 工作室 → 导入 DSL 文件
+#
+# 面试考点：
+#   - Dify DSL：声明式配置 Agent 的 Prompt/工具/模型/参数
+#   - 与自研对比：Dify 通过 UI 拖拽配置，自研通过代码控制
+#   - 适用场景：快速搭建内部工具、原型验证、非技术人员使用
+
+app:
+  name: "MyAgent 智能助手"
+  description: "基于 MyAgent 工具集的智能助手，支持数学计算、代码执行、知识检索"
+  mode: agent-chat
+  icon: "🤖"
+  icon_background: "#FFEAD5"
+
+model_config:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+    mode: chat
+    completion_params:
+      temperature: 0.1
+      max_tokens: 2000
+      top_p: 1.0
+
+  # Agent 系统提示词
+  pre_prompt: |
+    你是一个智能助手，可以使用以下工具来帮助用户：
+    - calculator: 数学计算（支持复杂表达式）
+    - rag_search: 知识库检索（搜索相关文档）
+    - sql_query: 将自然语言转换为 SQL 查询
+    - code_exec: 执行 Python 代码
+
+    请根据用户的问题，选择合适的工具，给出准确、简洁的回答。
+    如果不需要工具，直接回答即可。
+
+  # Agent 策略
+  agent_mode:
+    strategy: react  # ReAct 推理策略
+    max_iteration: 10
+
+  # 工具配置（需要在 Dify 控制台配置自定义工具后引用）
+  tools:
+    - provider_type: api
+      provider_id: myagent-tools
+      tool_name: calculator
+      tool_label: "数学计算器"
+      enabled: true
+
+    - provider_type: api
+      provider_id: myagent-tools
+      tool_name: rag_search
+      tool_label: "知识库检索"
+      enabled: true
+      tool_parameters:
+        top_k:
+          type: number
+          value: 5
+
+    - provider_type: api
+      provider_id: myagent-tools
+      tool_name: sql_query
+      tool_label: "SQL 查询生成"
+      enabled: true
+
+    - provider_type: api
+      provider_id: myagent-tools
+      tool_name: code_exec
+      tool_label: "Python 代码执行"
+      enabled: true
+
+  # 对话开场白
+  opening_statement: "你好！我是 MyAgent 智能助手，可以帮你进行数学计算、代码执行和知识检索。请问有什么可以帮助你的？"
+
+  # 建议问题
+  suggested_questions:
+    - "计算 (123 + 456) * 789 - 321 的结果"
+    - "用 Python 实现快速排序算法"
+    - "查询用户表中最近7天的活跃用户数"
+    - "什么是 Transformer 的注意力机制？"
+
+  # 记忆配置
+  memory:
+    enabled: true
+    window:
+      enabled: true
+      size: 10  # 保留最近10轮对话
+
+  # 文件上传
+  file_upload:
+    enabled: false

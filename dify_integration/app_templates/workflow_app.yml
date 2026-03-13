@@ -1,0 +1,160 @@
+# Dify Workflow 应用配置模板 — 数据分析场景
+#
+# 面试考点：
+#   - Dify Workflow 是可视化 DAG，每个节点是一个处理步骤
+#   - 节点类型：LLM / 工具调用 / 代码执行 / 条件判断 / 知识检索
+#   - 与自研 DAG 引擎对比：Dify 通过 UI 拖拽，自研通过代码定义
+#   - 适用场景：数据处理流水线、报告生成、内容审核
+
+app:
+  name: "数据分析 Workflow"
+  description: "输入数据描述，自动生成分析报告：SQL查询 → 代码分析 → 报告撰写"
+  mode: workflow
+  icon: "📊"
+
+workflow:
+  # 输入变量定义
+  variables:
+    - key: data_description
+      name: "数据描述"
+      type: string
+      required: true
+      description: "描述要分析的数据，如：分析最近30天的用户活跃度趋势"
+
+    - key: output_format
+      name: "输出格式"
+      type: select
+      required: false
+      default: "markdown"
+      options:
+        - value: markdown
+          label: "Markdown 报告"
+        - value: json
+          label: "JSON 数据"
+
+  # 节点定义
+  nodes:
+
+    # 节点1: 生成 SQL 查询
+    - id: node_sql_gen
+      type: tool
+      title: "生成 SQL 查询"
+      tool:
+        provider_type: api
+        provider_id: myagent-tools
+        tool_name: sql_query
+      inputs:
+        natural_language: "{{data_description}}"
+      outputs:
+        sql_query: "$.sql"
+
+    # 节点2: 代码分析（模拟执行分析逻辑）
+    - id: node_analysis
+      type: tool
+      title: "数据分析代码"
+      tool:
+        provider_type: api
+        provider_id: myagent-tools
+        tool_name: code_exec
+      inputs:
+        code: |
+          # 模拟数据分析
+          import json
+          import random
+
+          # 生成模拟数据
+          data = {
+              "total_users": random.randint(1000, 5000),
+              "active_users": random.randint(500, 2000),
+              "avg_sessions": round(random.uniform(2.0, 8.0), 2),
+              "trend": random.choice(["上升", "稳定", "下降"]),
+          }
+          print(json.dumps(data, ensure_ascii=False))
+      outputs:
+        analysis_data: "$.output"
+
+    # 节点3: LLM 生成报告
+    - id: node_report
+      type: llm
+      title: "生成分析报告"
+      model:
+        provider: openai
+        name: gpt-4o-mini
+        mode: chat
+        completion_params:
+          temperature: 0.3
+          max_tokens: 1500
+      prompt:
+        system: |
+          你是一个数据分析专家，擅长将数据分析结果转化为清晰的报告。
+          请根据提供的数据生成一份专业的分析报告。
+        user: |
+          分析需求：{{data_description}}
+
+          生成的 SQL 查询：
+          {{node_sql_gen.sql_query}}
+
+          分析数据：
+          {{node_analysis.analysis_data}}
+
+          请生成一份{{output_format}}格式的分析报告，包含：
+          1. 核心指标摘要
+          2. 趋势分析
+          3. 建议与洞察
+      outputs:
+        report: "$.text"
+
+    # 节点4: 条件判断（根据趋势给出不同建议）
+    - id: node_condition
+      type: if-else
+      title: "趋势判断"
+      conditions:
+        - id: cond_rising
+          logical_operator: and
+          conditions:
+            - variable_selector: ["node_analysis", "analysis_data"]
+              comparison_operator: contains
+              value: "上升"
+      cases:
+        - id: case_rising
+          condition_id: cond_rising
+          next_node: node_alert_positive
+        - id: case_default
+          next_node: node_end
+
+    # 节点5: 正向提醒
+    - id: node_alert_positive
+      type: llm
+      title: "增长提醒"
+      model:
+        provider: openai
+        name: gpt-4o-mini
+        mode: chat
+      prompt:
+        user: "数据呈上升趋势，请给出3条保持增长的建议（简短）"
+      outputs:
+        suggestions: "$.text"
+
+    # 结束节点
+    - id: node_end
+      type: end
+      title: "输出结果"
+      outputs:
+        - variable: report
+          value_selector: ["node_report", "report"]
+        - variable: sql_query
+          value_selector: ["node_sql_gen", "sql_query"]
+
+  # 节点连接（边定义）
+  edges:
+    - source: node_sql_gen
+      target: node_analysis
+    - source: node_analysis
+      target: node_report
+    - source: node_report
+      target: node_condition
+    - source: node_condition
+      target: node_end
+      condition: case_default
+    - source: node_alert_positive
+      target: node_end
