@@ -199,7 +199,7 @@ function showQuickResultModal(result) {
     const body = $('quick-result-body');
     const metrics = result.metrics || {};
     body.innerHTML = `
-        <div class="space-y-4">
+        <div class="space-y-4">-
             <div class="grid grid-cols-2 gap-3">
                 <div class="bg-gray-50 rounded-lg p-3">
                     <p class="text-xs text-gray-400 mb-1">任务 ID</p>

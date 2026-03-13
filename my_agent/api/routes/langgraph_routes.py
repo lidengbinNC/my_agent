@@ -97,7 +97,6 @@ async def get_react_graph_structure() -> JSONResponse:
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-
 @router.post("/checkpoint/demo", summary="运行 Checkpoint 多轮对话演示")
 async def checkpoint_demo() -> JSONResponse:
     """演示 LangGraph Checkpoint 多轮对话记忆。"""

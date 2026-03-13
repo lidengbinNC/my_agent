@@ -27,7 +27,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Any
+import operator
+from typing import Annotated, Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -71,7 +72,26 @@ class ReplanDecision(BaseModel):
     reason: str = Field(default="", description="重规划原因")
 
 
+# ── 步骤执行结果（替换裸 dict，提升可读性和类型安全）─────────────
+
+class StepResult(TypedDict):
+    """单步执行结果，替代原来的裸 dict[str, Any]。
+    改造说明：原 step_results: list[dict] 无类型约束，字段名靠字符串索引，
+    容易拼写错误且 IDE 无法补全。改为 TypedDict 后字段明确、可静态检查。
+    """
+    step_id: int
+    description: str
+    result: str
+    success: bool
+
+
 # ── 2. 图状态定义 ─────────────────────────────────────────────────
+#
+# 改造说明：
+#   1. plan 字段原为 ExecutionPlan | None，改用 Optional[ExecutionPlan] 语义更清晰
+#   2. step_results 原为 list[dict]，改为 list[StepResult] 提升类型安全
+#   3. 新增 messages 字段：记录关键执行事件，便于 Checkpoint 回溯和调试
+#      （原设计完全没有消息追踪，Human-in-the-Loop 场景下无法查看执行历史）
 
 class PlanExecState(TypedDict):
     """Plan-and-Execute 图的共享状态。"""
@@ -79,15 +99,18 @@ class PlanExecState(TypedDict):
     goal: str
 
     # 规划阶段
-    plan: ExecutionPlan | None
+    plan: Optional[ExecutionPlan]
     current_step_idx: int
 
-    # 执行阶段
-    step_results: list[dict]       # 每步的执行结果
+    # 执行阶段（step_results 从 list[dict] 改为 list[StepResult]，类型明确）
+    step_results: list[StepResult]
     current_step_result: str
 
     # 重规划
     replan_count: int
+
+    # 执行事件追踪（新增）：记录规划/执行/重规划的关键日志，便于调试和 Human-in-Loop
+    messages: Annotated[list[str], operator.add]
 
     # 输出
     final_answer: str
@@ -126,10 +149,15 @@ async def planner_node(state: PlanExecState) -> dict:
     try:
         plan: ExecutionPlan = await chain.ainvoke({"goal": state["goal"]})
         logger.info("lg_plan_created", steps=len(plan.steps), goal=state["goal"][:50])
-        return {"plan": plan, "current_step_idx": 0, "replan_count": 0}
+        return {
+            "plan": plan,
+            "current_step_idx": 0,
+            "replan_count": 0,
+            "messages": [f"[规划完成] 共 {len(plan.steps)} 步: {plan.reasoning[:80]}"],
+        }
     except Exception as e:
         logger.error("lg_plan_failed", error=str(e))
-        return {"error": f"规划失败: {e}"}
+        return {"error": f"规划失败: {e}", "messages": [f"[规划失败] {e}"]}
 
 
 async def executor_node(state: PlanExecState) -> dict:
@@ -174,29 +202,33 @@ async def executor_node(state: PlanExecState) -> dict:
         last_msg = result["messages"][-1]
         step_result = getattr(last_msg, "content", str(last_msg))
 
-        step_results.append({
+        step_result_item: StepResult = {
             "step_id": step.step_id,
             "description": step.description,
             "result": step_result,
             "success": True,
-        })
+        }
+        step_results.append(step_result_item)
         logger.info("lg_step_done", step_id=step.step_id)
         return {
             "step_results": step_results,
             "current_step_result": step_result,
             "current_step_idx": idx + 1,
+            "messages": [f"[步骤{step.step_id}完成] {step.description[:50]}"],
         }
     except Exception as e:
-        step_results.append({
+        step_result_item: StepResult = {
             "step_id": step.step_id,
             "description": step.description,
             "result": f"执行失败: {e}",
             "success": False,
-        })
+        }
+        step_results.append(step_result_item)
         return {
             "step_results": step_results,
             "current_step_result": f"步骤执行失败: {e}",
             "current_step_idx": idx + 1,
+            "messages": [f"[步骤{step.step_id}失败] {e}"],
         }
 
 
@@ -252,7 +284,11 @@ async def replanner_node(state: PlanExecState) -> dict:
                 reasoning=f"第{replan_count + 1}次重规划: {decision.reason}",
             )
             logger.info("lg_replanned", reason=decision.reason[:50])
-            return {"plan": new_plan, "replan_count": replan_count + 1}
+            return {
+                "plan": new_plan,
+                "replan_count": replan_count + 1,
+                "messages": [f"[重规划] 第{replan_count + 1}次: {decision.reason[:60]}"],
+            }
     except Exception as e:
         logger.warning("lg_replan_failed", error=str(e))
 
@@ -362,6 +398,7 @@ async def run_plan_execute_agent(goal: str) -> dict[str, Any]:
         "step_results": [],
         "current_step_result": "",
         "replan_count": 0,
+        "messages": [],
         "final_answer": "",
         "error": "",
     }

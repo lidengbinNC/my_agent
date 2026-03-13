@@ -44,9 +44,17 @@ logger = get_logger(__name__)
 # ── 1. 定义图状态 ─────────────────────────────────────────────────
 # Annotated[list, add_messages]: LangGraph 内置 reducer，自动将新消息追加到列表
 # 面试考点：Reducer 函数决定如何合并新旧状态值
+#
+# 改造说明：
+#   原设计只有 messages 字段，存在两个问题：
+#   1. max_iterations 参数传入 build_react_graph 但从未被使用，无法防止无限循环
+#   2. 缺少 error 字段，节点异常时无法在 State 中传递错误信息
+#   新增 iteration_count（配合条件边实现迭代上限）和 error 字段解决上述问题
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    iteration_count: int   # 当前已执行的工具调用轮次，配合 max_iterations 防止无限循环
+    error: str             # 节点异常信息，非空时条件边直接路由到 END
 
 
 # ── 2. 将自研工具系统桥接为 LangChain Tool ────────────────────────
@@ -107,8 +115,12 @@ def build_react_graph(
     # ── 节点函数 ──────────────────────────────────────────────────
     async def agent_node(state: AgentState) -> dict:
         """LLM 推理节点：接收当前消息历史，输出 AIMessage（可能含 tool_calls）。"""
-        response = await llm_with_tools.ainvoke(state["messages"])
-        return {"messages": [response]}
+        try:
+            response = await llm_with_tools.ainvoke(state["messages"])
+            return {"messages": [response], "error": ""}
+        except Exception as e:
+            logger.error("lg_agent_node_failed", error=str(e))
+            return {"error": f"LLM 调用失败: {e}"}
 
     # ToolNode: 自动解析 AIMessage.tool_calls，并行执行所有工具调用
     tool_node = ToolNode(lc_tools)
@@ -118,18 +130,32 @@ def build_react_graph(
         """判断是否继续调用工具。
 
         面试考点：条件边是 LangGraph 实现 ReAct 循环的核心机制
+          - error 非空 → 直接结束，避免带错误状态继续循环
+          - iteration_count 达到上限 → 结束，防止无限循环（原设计的 bug）
           - 最后一条消息是 AIMessage 且有 tool_calls → 继续执行工具
           - 最后一条消息是 AIMessage 且无 tool_calls → 结束（Final Answer）
         """
+        if state.get("error"):
+            return END
+
+        if state.get("iteration_count", 0) >= max_iterations:
+            logger.warning("lg_max_iterations_reached", count=max_iterations)
+            return END
+
         last_msg = state["messages"][-1]
         if isinstance(last_msg, AIMessage) and last_msg.tool_calls:
             return "tools"
         return END
 
+    async def tool_node_with_counter(state: AgentState) -> dict:
+        """包装 ToolNode，每次工具调用后递增 iteration_count。"""
+        result = await tool_node.ainvoke(state)
+        return {**result, "iteration_count": state.get("iteration_count", 0) + 1}
+
     # ── 构建图 ────────────────────────────────────────────────────
     graph = StateGraph(AgentState)
     graph.add_node("agent", agent_node)
-    graph.add_node("tools", tool_node)
+    graph.add_node("tools", tool_node_with_counter)
 
     graph.add_edge(START, "agent")
     graph.add_conditional_edges(
@@ -166,7 +192,9 @@ async def run_react_agent(
         SystemMessage(content=system_prompt),
         HumanMessage(content=question),
     ]
-    result = await app.ainvoke({"messages": messages})
+    result = await app.ainvoke({"messages": messages, "iteration_count": 0, "error": ""})
+    if result.get("error"):
+        return f"[错误] {result['error']}"
     last = result["messages"][-1]
     return last.content if hasattr(last, "content") else str(last)
 
@@ -186,7 +214,7 @@ async def stream_react_agent(
         SystemMessage(content=system_prompt),
         HumanMessage(content=question),
     ]
-    async for event in app.astream({"messages": messages}):
+    async for event in app.astream({"messages": messages, "iteration_count": 0, "error": ""}):
         for node_name, node_output in event.items():
             msgs = node_output.get("messages", [])
             for msg in msgs:

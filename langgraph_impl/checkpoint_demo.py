@@ -122,14 +122,29 @@ async def demo_multi_turn_conversation() -> list[dict]:
 # ── 2. Human-in-the-Loop (interrupt_before) ──────────────────────
 
 class ReviewState(TypedDict):
+    """Human-in-the-Loop 审核图的状态。
+    改造说明：
+      1. 原设计 approved 初始为 False，route_after_review 直接读 approved 做路由，
+         但 draft_node 不写 approved 字段，导致每次都走 revise 分支（逻辑 bug）。
+         新增 needs_revision 字段专门表达"是否需要修订"，与 approved（最终审批结果）
+         语义分离，路由逻辑更清晰。
+      2. human_feedback 为空时 revise_node 静默跳过（return {}），行为不透明。
+         改造后 route_after_review 在 needs_revision=False 时直接路由到 publish，
+         不再进入 revise 节点，消除静默跳过的歧义。
+    """
     messages: Annotated[list[BaseMessage], add_messages]
     draft: str
-    approved: bool
-    human_feedback: str
+    approved: bool          # 最终发布审批结果
+    needs_revision: bool    # 是否需要人工修订（新增，与 approved 语义分离）
+    human_feedback: str     # 人工修订意见
 
 
 async def draft_node(state: ReviewState) -> dict:
-    """起草节点：生成初稿。"""
+    """起草节点：生成初稿。
+    改造说明：明确写入 needs_revision=True，表示草稿生成后默认需要人工审核，
+    route_after_review 据此路由到 revise（触发 interrupt_before 暂停）。
+    人工审核通过后通过 update_state 将 needs_revision 改为 False 再继续执行。
+    """
     llm = _make_llm()
     last_human = next(
         (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
@@ -140,16 +155,17 @@ async def draft_node(state: ReviewState) -> dict:
         HumanMessage(content=last_human),
     ])
     logger.info("lg_draft_created")
-    return {"draft": response.content}
+    return {"draft": response.content, "needs_revision": True}
 
 
 async def revise_node(state: ReviewState) -> dict:
-    """修订节点：根据人工反馈修改草稿。"""
+    """修订节点：根据人工反馈修改草稿。
+    改造说明：原设计 feedback 为空时 return {} 静默跳过，行为不透明且难以调试。
+    现在 revise_node 只在 needs_revision=True 且有 feedback 时才会被路由到，
+    因此无需再做空判断，直接执行修订逻辑，语义更清晰。
+    """
     llm = _make_llm()
     feedback = state.get("human_feedback", "")
-    if not feedback:
-        return {}
-
     response = await llm.ainvoke([
         SystemMessage(content="你是一个内容编辑，根据反馈修改草稿。"),
         HumanMessage(content=f"原稿:\n{state['draft']}\n\n修改意见:\n{feedback}\n\n请修改:"),
@@ -157,6 +173,7 @@ async def revise_node(state: ReviewState) -> dict:
     logger.info("lg_draft_revised")
     return {
         "draft": response.content,
+        "needs_revision": False,
         "messages": [AIMessage(content=f"已根据反馈修改：{response.content[:100]}...")],
     }
 
@@ -171,10 +188,14 @@ async def publish_node(state: ReviewState) -> dict:
 
 
 def route_after_review(state: ReviewState) -> str:
-    """审核后路由：通过则发布，否则修订。"""
-    if state.get("approved"):
-        return "publish"
-    return "revise"
+    """审核后路由：需要修订则进 revise（触发 interrupt_before 暂停），否则直接发布。
+    改造说明：原设计读 approved 字段，但 draft_node 不写 approved，
+    导致 approved 始终为初始值 False，每次都走 revise 分支。
+    现在改为读 needs_revision，语义明确：True=需要人工介入，False=直接发布。
+    """
+    if state.get("needs_revision", True):
+        return "revise"
+    return "publish"
 
 
 def build_human_review_graph() -> Any:
@@ -226,6 +247,7 @@ async def demo_human_in_the_loop() -> dict[str, Any]:
         "messages": [HumanMessage(content="请写一篇关于 LangGraph 的技术介绍（100字）")],
         "draft": "",
         "approved": False,
+        "needs_revision": False,
         "human_feedback": "",
     }
 
@@ -233,11 +255,11 @@ async def demo_human_in_the_loop() -> dict[str, Any]:
     draft = result.get("draft", "")
     logger.info("lg_hitl_paused", draft_preview=draft[:50])
 
-    # 步骤2: 模拟人工审核 — 注入反馈
+    # 步骤2: 模拟人工审核 — 注入反馈，同时保持 needs_revision=True 让 revise 节点继续执行
     human_feedback = "请增加 LangGraph 与 LangChain 的关系说明，并突出 Checkpoint 特性"
     await app.aupdate_state(
         config=thread_config,
-        values={"human_feedback": human_feedback, "approved": False},
+        values={"human_feedback": human_feedback, "needs_revision": True},
     )
     logger.info("lg_hitl_feedback_injected")
 
