@@ -52,11 +52,18 @@ async def lifespan(app: FastAPI):
     register_all_handlers(queue)
     await queue.start()
     logger.info("task_queue_started")
+    # 初始化 LangGraph SqliteSaver（单例 checkpointer + 图实例）
+    # 写入 lg_checkpoints.db，可用 DB Browser for SQLite 查看 State 变化
+    from langgraph_impl.checkpoint_store import init_checkpointer, CHECKPOINT_DB_PATH
+    await init_checkpointer()
+    logger.info("lg_checkpointer_ready", db=CHECKPOINT_DB_PATH)
     yield
     logger = get_logger("shutdown")
     logger.info("app_shutting_down")
     await queue.stop()
     await shutdown_clients()
+    from langgraph_impl.checkpoint_store import shutdown_checkpointer
+    await shutdown_checkpointer()
     from my_agent.utils.langfuse_client import get_langfuse_client
     get_langfuse_client().flush()
 

@@ -22,6 +22,9 @@ const deepThinkText = document.getElementById('deep-think-text');
 const multiAgentBtn  = document.getElementById('multi-agent-btn');
 const multiAgentText = document.getElementById('multi-agent-text');
 const scenarioSelect = document.getElementById('scenario-select');
+const engineSelfBtn  = document.getElementById('engine-self-btn');
+const engineLgBtn    = document.getElementById('engine-lg-btn');
+const lgModeSelect   = document.getElementById('lg-mode-select');
 
 let isStreaming = false;
 let streamMode = true;       // 默认开启流式输出
@@ -30,6 +33,8 @@ let multiAgentMode = false;  // 多 Agent 协作模式
 let currentSessionId = null;
 let defaultPlanAgentId = null; // 服务端预创建的 Plan-and-Execute Agent ID
 let selectedScenario = 'research_report'; // 默认多 Agent 场景
+let useLangGraph = false;    // 是否使用 LangGraph 引擎
+let lgMode = 'react';        // LangGraph 运行模式
 
 // 启动时拉取默认 Plan Agent ID
 (async () => {
@@ -50,6 +55,62 @@ let selectedScenario = 'research_report'; // 默认多 Agent 场景
     }
 })();
 
+// ===== 引擎切换 =====
+// 注意：所有 class 名必须在 HTML 中预先出现，才能被 Tailwind CDN 扫描生成
+
+function setEngine(lg) {
+    useLangGraph = lg;
+
+    // 激活态 class
+    const ACTIVE_ADD    = ['bg-white', 'shadow-sm', 'font-medium'];
+    const ACTIVE_REMOVE = ['text-gray-400'];
+    // 非激活态 class
+    const INACTIVE_ADD    = ['text-gray-400'];
+    const INACTIVE_REMOVE = ['bg-white', 'shadow-sm', 'font-medium', 'text-emerald-700', 'text-gray-700'];
+
+    if (lg) {
+        // LangGraph 按钮激活
+        engineLgBtn.classList.remove(...INACTIVE_REMOVE);
+        engineLgBtn.classList.add(...ACTIVE_ADD, 'text-emerald-700');
+        // 自研按钮非激活
+        engineSelfBtn.classList.remove(...INACTIVE_REMOVE);
+        engineSelfBtn.classList.add(...INACTIVE_ADD);
+
+        lgModeSelect.classList.remove('hidden');
+
+        // LangGraph 引擎与深度思考/多 Agent 互斥
+        if (deepThinkMode) {
+            deepThinkMode = false;
+            deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
+            deepThinkBtn.classList.add('border-gray-200', 'text-gray-500');
+            deepThinkText.textContent = '深度思考';
+        }
+        if (multiAgentMode) {
+            multiAgentMode = false;
+            multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+            multiAgentBtn.classList.add('border-gray-200', 'text-gray-500');
+            multiAgentText.textContent = '多 Agent';
+            scenarioSelect.classList.add('hidden');
+        }
+    } else {
+        // 自研按钮激活
+        engineSelfBtn.classList.remove(...INACTIVE_REMOVE);
+        engineSelfBtn.classList.add(...ACTIVE_ADD, 'text-gray-700');
+        // LangGraph 按钮非激活
+        engineLgBtn.classList.remove(...INACTIVE_REMOVE);
+        engineLgBtn.classList.add(...INACTIVE_ADD);
+
+        lgModeSelect.classList.add('hidden');
+    }
+}
+
+engineSelfBtn.addEventListener('click', () => setEngine(false));
+engineLgBtn.addEventListener('click', () => setEngine(true));
+
+lgModeSelect.addEventListener('change', (e) => {
+    lgMode = e.target.value;
+});
+
 // 深度思考切换
 deepThinkBtn.addEventListener('click', () => {
     if (deepThinkBtn.disabled) return;
@@ -66,6 +127,8 @@ deepThinkBtn.addEventListener('click', () => {
             multiAgentText.textContent = '多 Agent';
             scenarioSelect.classList.add('hidden');
         }
+        // 深度思考与 LangGraph 互斥
+        if (useLangGraph) setEngine(false);
     } else {
         deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
         deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
@@ -88,6 +151,8 @@ multiAgentBtn.addEventListener('click', () => {
             deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
             deepThinkText.textContent = '深度思考';
         }
+        // 多 Agent 与 LangGraph 互斥
+        if (useLangGraph) setEngine(false);
     } else {
         multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
         multiAgentBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
@@ -160,7 +225,10 @@ chatForm.addEventListener('submit', async (e) => {
     userInput.value = '';
     setStreaming(true);
 
-    if (multiAgentMode) {
+    if (useLangGraph) {
+        // LangGraph 引擎
+        await streamLangGraph(message);
+    } else if (multiAgentMode) {
         // 多 Agent 协作：走 Coordinator 路由
         await streamMultiAgent(message);
     } else if (deepThinkMode && defaultPlanAgentId) {
@@ -824,4 +892,140 @@ function formatMarkdown(text) {
             '<code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs text-pink-600 font-mono">$1</code>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\n/g, '<br>');
+}
+
+// ===== LangGraph 引擎流式处理 =====
+
+const LG_MODE_LABELS = {
+    react:         'ReAct Agent',
+    plan_execute:  'Plan-and-Execute',
+    sequential:    'Sequential 多 Agent',
+    supervisor:    'Supervisor 多 Agent',
+};
+
+async function streamLangGraph(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const stepsContainer = msgWrapper.querySelector('.steps-container');
+    const answerBubble   = msgWrapper.querySelector('.answer-bubble');
+
+    // 顶部引擎标记
+    const badge = document.createElement('div');
+    badge.className = 'flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 mb-2';
+    badge.innerHTML = `
+        <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+        <span>LangGraph — ${LG_MODE_LABELS[lgMode] || lgMode}</span>`;
+    stepsContainer.appendChild(badge);
+
+    try {
+        const resp = await fetch('/api/v1/langgraph/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ question: message, mode: lgMode, stream: true }),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let answerContent = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const raw = line.slice(6).trim();
+                if (raw === '[DONE]') break;
+
+                let data;
+                try { data = JSON.parse(raw); } catch { continue; }
+
+                if (data.error) {
+                    appendErrorCard(stepsContainer, data.error);
+                    continue;
+                }
+
+                // 统一事件格式处理
+                const evType = data.type || data.event;
+                switch (evType) {
+                    case 'thinking':
+                        handleLgThinking(stepsContainer, data);
+                        break;
+                    case 'tool_call':
+                        handleToolCall(stepsContainer, { ...data, iteration: data.iteration || 1 });
+                        break;
+                    case 'tool_result':
+                        handleToolResult(stepsContainer, data);
+                        break;
+                    case 'content':
+                        answerContent += data.delta || data.content || '';
+                        answerBubble.innerHTML = formatMarkdown(answerContent);
+                        answerBubble.classList.remove('hidden');
+                        scrollToBottom();
+                        break;
+                    case 'done':
+                    case 'answer':
+                        // 非流式字段兜底
+                        if (!answerContent && (data.answer || data.final_answer)) {
+                            answerContent = data.answer || data.final_answer || '';
+                            answerBubble.innerHTML = formatMarkdown(answerContent);
+                            answerBubble.classList.remove('hidden');
+                            scrollToBottom();
+                        }
+                        break;
+                    default:
+                        // 原始 LangGraph astream 事件：尝试提取 messages 最后一条
+                        if (data.messages && Array.isArray(data.messages)) {
+                            const last = data.messages[data.messages.length - 1];
+                            if (last?.content && typeof last.content === 'string') {
+                                answerContent = last.content;
+                                answerBubble.innerHTML = formatMarkdown(answerContent);
+                                answerBubble.classList.remove('hidden');
+                                scrollToBottom();
+                            }
+                        }
+                }
+            }
+        }
+
+        // 若流结束后仍无内容，提示用户
+        if (!answerContent) {
+            answerBubble.innerHTML = '<span class="text-gray-400 text-xs">（LangGraph 未返回文本内容，请查看步骤卡片）</span>';
+            answerBubble.classList.remove('hidden');
+        }
+
+    } catch (err) {
+        appendErrorCard(stepsContainer, err.message);
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+function handleLgThinking(container, data) {
+    let indicator = container.querySelector('.thinking-live');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'thinking-live flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-2';
+        indicator.innerHTML = `
+            <div class="flex gap-1">
+                <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style="animation-delay:0s"></span>
+                <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style="animation-delay:.15s"></span>
+                <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" style="animation-delay:.3s"></span>
+            </div>
+            <span class="thinking-text"></span>`;
+        container.appendChild(indicator);
+    }
+    indicator.querySelector('.thinking-text').textContent =
+        data.message || data.content || `LangGraph 推理中...`;
+    scrollToBottom();
 }

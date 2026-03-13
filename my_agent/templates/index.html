@@ -15,7 +15,11 @@
                         primary: { 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
                     }
                 }
-            }
+            },
+            safelist: [
+                'bg-white', 'shadow-sm', 'font-medium',
+                'text-gray-400', 'text-gray-700', 'text-emerald-700',
+            ]
         }
     </script>
 </head>
@@ -115,6 +119,28 @@
             </form>
             <div class="flex items-center justify-center gap-4 mt-2 flex-wrap">
                 <span id="token-usage" class="text-xs text-gray-400"></span>
+                <!-- 引擎选择器 -->
+                <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5" title="选择底层推理引擎">
+                    <button id="engine-self-btn" data-active="true"
+                            class="engine-btn text-xs px-2.5 py-1 rounded-md transition-all
+                                   bg-white text-gray-700 shadow-sm font-medium">
+                        自研引擎
+                    </button>
+                    <button id="engine-lg-btn" data-active="false"
+                            class="engine-btn text-xs px-2.5 py-1 rounded-md transition-all
+                                   text-gray-400">
+                        LangGraph
+                    </button>
+                </div>
+                <!-- LangGraph 模式选择（仅 LangGraph 引擎开启时显示） -->
+                <select id="lg-mode-select"
+                        title="选择 LangGraph 运行模式"
+                        class="hidden text-xs border border-emerald-300 text-emerald-700 bg-emerald-50 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-400 cursor-pointer">
+                    <option value="react">ReAct Agent</option>
+                    <option value="plan_execute">Plan-and-Execute</option>
+                    <option value="sequential">Sequential 多 Agent</option>
+                    <option value="supervisor">Supervisor 多 Agent</option>
+                </select>
                 <!-- 多 Agent 协作切换 -->
                 <div class="flex items-center gap-1.5">
                     <button id="multi-agent-btn"

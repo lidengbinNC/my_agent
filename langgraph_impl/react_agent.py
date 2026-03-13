@@ -168,10 +168,16 @@ def build_react_graph(
     return graph
 
 
-def compile_react_graph(**kwargs) -> Any:
-    """编译 ReAct Graph，返回可执行的 CompiledGraph。"""
+def compile_react_graph(checkpointer: Any = None, **kwargs) -> Any:
+    """编译 ReAct Graph，返回可执行的 CompiledGraph。
+
+    Args:
+        checkpointer: 可选，传入 SqliteSaver/MemorySaver 实例以启用 Checkpoint 持久化。
+                      传入后同一 thread_id 的多次调用共享对话历史。
+                      不传则无状态（每次调用独立）。
+    """
     graph = build_react_graph(**kwargs)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ── 4. 便捷运行接口 ───────────────────────────────────────────────
