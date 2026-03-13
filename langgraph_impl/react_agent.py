@@ -58,24 +58,63 @@ class AgentState(TypedDict):
 
 
 # ── 2. 将自研工具系统桥接为 LangChain Tool ────────────────────────
-# 面试考点：适配器模式 — 将内部 BaseTool 适配为 LangChain @tool 格式
+# 面试考点：适配器模式 — 将内部 BaseTool 适配为 LangChain StructuredTool 格式
+#
+# 为什么不用 @lc_tool(**kwargs) 签名？
+#   @lc_tool 通过函数签名推断 JSON Schema，**kwargs 签名会生成
+#   {"kwargs": {"type": "object"}} 这样的错误 Schema，LLM 就会把所有参数
+#   包进一层 {"kwargs": {"query": "..."}}，导致工具调用时参数不匹配。
+#
+# 正确做法：用 StructuredTool.from_function() 直接传入已有的 parameters_schema，
+#   完全绕过签名推断，确保 LLM 拿到的 Schema 与工具实际参数一致。
 
 def _build_lc_tools() -> list:
-    """将自研 ToolRegistry 中的工具转换为 LangChain Tool 列表。"""
+    """将自研 ToolRegistry 中的工具转换为 LangChain StructuredTool 列表。
+
+    适配器模式：
+      内部 BaseTool（parameters_schema + _execute）
+        → LangChain StructuredTool（args_schema + coroutine）
+        → llm.bind_tools() 绑定给 LLM
+    """
     import my_agent.domain.tool.builtin  # noqa: F401 触发工具注册
     from my_agent.domain.tool.registry import get_registry
+    from langchain_core.tools import StructuredTool
+    from pydantic import create_model
 
     registry = get_registry()
     lc_tools = []
 
     for internal_tool in registry.all():
-        # 闭包捕获 internal_tool，避免循环变量问题
         def _make_tool(t):
-            @lc_tool(t.name, description=t.description)
-            async def _wrapped(**kwargs: Any) -> str:
+            # 将 parameters_schema 转换为 Pydantic model（StructuredTool 的 args_schema）
+            # 这样 LangChain 直接用我们已有的 JSON Schema，不再从函数签名推断
+            props = t.parameters_schema.get("properties", {})
+            required = t.parameters_schema.get("required", [])
+
+            field_definitions: dict[str, Any] = {}
+            for field_name, field_info in props.items():
+                json_type = field_info.get("type", "string")
+                py_type: type = {"string": str, "integer": int, "number": float, "boolean": bool}.get(json_type, str)
+                description = field_info.get("description", "")
+                if field_name in required:
+                    from pydantic import Field as PydanticField
+                    field_definitions[field_name] = (py_type, PydanticField(description=description))
+                else:
+                    from pydantic import Field as PydanticField
+                    field_definitions[field_name] = (py_type, PydanticField(default=None, description=description))
+
+            ArgsModel = create_model(f"{t.name}_args", **field_definitions)
+
+            async def _coroutine(**kwargs: Any) -> str:
                 result = await t._execute(**kwargs)
                 return result.to_observation()
-            return _wrapped
+
+            return StructuredTool(
+                name=t.name,
+                description=t.description,
+                args_schema=ArgsModel,
+                coroutine=_coroutine,
+            )
 
         lc_tools.append(_make_tool(internal_tool))
 
