@@ -36,13 +36,51 @@ router = APIRouter(prefix="/langgraph", tags=["langgraph"])
 logger = get_logger(__name__)
 
 
+# ── JSON 序列化安全辅助函数 ────────────────────────────────────────
+
+def _safe_str(value: Any) -> str:
+    """将任意值安全转为字符串，避免 LangChain 消息对象导致 JSON 序列化失败。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        # content 有时是 [{"type": "text", "text": "..."}] 格式
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(item.get("text", str(item)))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(value)
+
+
+def _safe_json(value: Any) -> Any:
+    """递归将值转为 JSON 可序列化的基本类型，处理嵌套的 LangChain 对象。"""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {k: _safe_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_json(item) for item in value]
+    # LangChain 消息对象或其他不可序列化对象 → 转为字符串
+    if hasattr(value, "content"):
+        return _safe_str(value.content)
+    return str(value)
+
+
 # ── Pydantic 请求模型 ──────────────────────────────────────────────
 
 class LGChatRequest(BaseModel):
     question: str
     mode: str = Field(default="react", description="react / plan_execute / sequential / supervisor")
     stream: bool = False
-    thread_id: str = Field(default="", description="会话 ID，相同 thread_id 共享对话历史（仅 react 模式有效）")
+    thread_id: str = Field(
+        default="",
+        description=(
+            "会话 ID，相同 thread_id 跨请求共享对话历史（仅 react 模式有效）。"
+            "不填则自动生成 UUID，每次对话都会写入 checkpoint，响应中返回生成的 thread_id。"
+        ),
+    )
 
 
 class ConversationRequest(BaseModel):
@@ -78,30 +116,61 @@ async def langgraph_chat(body: LGChatRequest) -> JSONResponse | StreamingRespons
 
     try:
         if body.mode == "react":
-            from langgraph_impl.react_agent import compile_react_graph
+            import uuid
             from langchain_core.messages import HumanMessage, SystemMessage
-            from langgraph_impl.checkpoint_store import get_checkpointer
+            from langgraph_impl.checkpoint_store import get_react_app
 
-            # react 模式：若提供 thread_id，使用 SqliteSaver 持久化跨请求历史
-            if body.thread_id:
-                checkpointer = get_checkpointer()
-                app = compile_react_graph(checkpointer=checkpointer)
-                config = {"configurable": {"thread_id": body.thread_id}}
-                messages = [
-                    SystemMessage(content="你是一个智能助手，可以使用工具来回答问题。请用中文回答。"),
-                    HumanMessage(content=body.question),
-                ]
-                result = await app.ainvoke(
-                    {"messages": messages, "iteration_count": 0, "error": ""},
-                    config=config,
-                )
-                last = result["messages"][-1]
-                answer = getattr(last, "content", str(last))
+            # thread_id 未传则自动生成，确保每次对话都写入 checkpoint
+            thread_id = body.thread_id or str(uuid.uuid4())
+
+            # 面试考点（两个关键细节）：
+            #   1. 必须用单例图（get_react_app()），不能每次 compile_react_graph()
+            #      — 每次 compile 是新图实例，无法关联到之前的 checkpoint
+            #   2. 有历史时只传新的 HumanMessage，无历史时才传 SystemMessage
+            #      — LangGraph add_messages reducer 是 append 语义
+            #      — 每次都传 SystemMessage 会导致历史里堆积多条 SystemMessage
+            app = get_react_app()
+            config = {"configurable": {"thread_id": thread_id}}
+
+            # 检查是否已有历史 checkpoint
+            existing_state = await app.aget_state(config)
+            has_history = bool(existing_state and existing_state.values.get("messages"))
+
+            if has_history:
+                # 续接历史：只传新消息，LangGraph 自动 append 到历史后
+                invoke_input = {
+                    "messages": [HumanMessage(content=body.question)],
+                    "iteration_count": 0,
+                    "error": "",
+                }
             else:
-                from langgraph_impl.react_agent import run_react_agent
-                answer = await run_react_agent(body.question)
+                # 首次对话：传完整初始 State，包含 SystemMessage
+                invoke_input = {
+                    "messages": [
+                        SystemMessage(content="你是一个智能助手，可以使用工具来回答问题。请用中文回答。"),
+                        HumanMessage(content=body.question),
+                    ],
+                    "iteration_count": 0,
+                    "error": "",
+                }
 
-            return JSONResponse(content={"mode": "react", "answer": answer, "thread_id": body.thread_id})
+            result = await app.ainvoke(invoke_input, config=config)
+            last = result["messages"][-1]
+            answer = getattr(last, "content", str(last))
+
+            # 返回当前 checkpoint 信息，方便调试
+            final_state = await app.aget_state(config)
+            checkpoint_id = final_state.config.get("configurable", {}).get("checkpoint_id", "")
+            msg_count = len(final_state.values.get("messages", []))
+
+            return JSONResponse(content={
+                "mode": "react",
+                "answer": answer,
+                "thread_id": thread_id,
+                "checkpoint_id": checkpoint_id,
+                "message_count": msg_count,
+                "tip": f"下次对话传入相同 thread_id 可续接历史；可通过 GET /api/v1/langgraph/checkpoints/{thread_id}?graph_type=react 查看 checkpoint 历史",
+            })
 
         elif body.mode == "plan_execute":
             from langgraph_impl.plan_execute import run_plan_execute_agent
@@ -390,11 +459,13 @@ async def get_checkpoints(
         graph_type: "conversation"（对话图）或 "hitl"（审核图）
     """
     try:
-        from langgraph_impl.checkpoint_store import get_conversation_app, get_review_app
+        from langgraph_impl.checkpoint_store import get_conversation_app, get_review_app, get_react_app
         from langgraph_impl.checkpoint_demo import get_thread_history
 
         if graph_type == "hitl":
             app = get_review_app()
+        elif graph_type == "react":
+            app = get_react_app()
         else:
             app = get_conversation_app()
 
@@ -439,28 +510,48 @@ async def _stream_langgraph(question: str, mode: str, thread_id: str = ""):
     """LangGraph 流式输出生成器 — 将 LangGraph 事件转换为前端可识别的 SSE 格式。"""
     try:
         if mode == "react":
-            from langgraph_impl.react_agent import compile_react_graph
+            import uuid as _uuid
             from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+            from langgraph_impl.checkpoint_store import get_react_app
 
-            # react 模式：有 thread_id 则使用 SqliteSaver 持久化
-            if thread_id:
-                from langgraph_impl.checkpoint_store import get_checkpointer
-                app = compile_react_graph(checkpointer=get_checkpointer())
-                config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+            # thread_id 未传则自动生成，确保流式模式也写入 checkpoint
+            effective_thread_id = thread_id or str(_uuid.uuid4())
+            app = get_react_app()
+            config: dict[str, Any] = {"configurable": {"thread_id": effective_thread_id}}
+
+            existing_state = await app.aget_state(config)
+            has_history = bool(existing_state and existing_state.values.get("messages"))
+
+            if has_history:
+                stream_kwargs: dict[str, Any] = {
+                    "messages": [HumanMessage(content=question)],
+                    "iteration_count": 0,
+                    "error": "",
+                }
             else:
-                app = compile_react_graph()
-                config = {}
+                stream_kwargs = {
+                    "messages": [
+                        SystemMessage(content="你是一个智能助手，可以使用工具来回答问题。请用中文回答。"),
+                        HumanMessage(content=question),
+                    ],
+                    "iteration_count": 0,
+                    "error": "",
+                }
 
-            messages = [
-                SystemMessage(content="你是一个智能助手，可以使用工具来回答问题。请用中文回答。"),
-                HumanMessage(content=question),
-            ]
+            # 先推送 thread_id，前端可用于后续续接
+            yield f"data: {json.dumps({'type': 'thread_id', 'thread_id': effective_thread_id}, ensure_ascii=False)}\n\n"
 
+            # 使用 stream_mode="updates" 只获取每个节点的增量输出（delta），
+            # 而不是默认的 "values"（每次输出完整 state 快照）。
+            # 这样可以避免 __start__ 节点把原始输入 state（含 SystemMessage）也输出出来。
             iteration = 0
-            stream_kwargs: dict[str, Any] = {"messages": messages, "iteration_count": 0, "error": ""}
-            async for event in app.astream(stream_kwargs, config=config or None):
+            async for event in app.astream(stream_kwargs, config=config or None, stream_mode="updates"):
                 for node_name, node_output in event.items():
+                    if not isinstance(node_output, dict):
+                        continue
                     msgs = node_output.get("messages", [])
+                    if not isinstance(msgs, list):
+                        continue
                     for msg in msgs:
                         if isinstance(msg, AIMessage):
                             if msg.tool_calls:
@@ -469,19 +560,20 @@ async def _stream_langgraph(question: str, mode: str, thread_id: str = ""):
                                     payload = {
                                         "type": "tool_call",
                                         "tool": tc.get("name", ""),
-                                        "args": tc.get("args", {}),
-                                        "thought": msg.content or "",
+                                        "args": _safe_json(tc.get("args", {})),
+                                        "thought": _safe_str(msg.content),
                                         "iteration": iteration,
                                     }
                                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                             elif msg.content:
                                 if node_name == "agent":
-                                    yield f"data: {json.dumps({'type': 'thinking', 'message': str(msg.content)[:120]}, ensure_ascii=False)}\n\n"
-                                    yield f"data: {json.dumps({'type': 'content', 'delta': msg.content}, ensure_ascii=False)}\n\n"
+                                    content_str = _safe_str(msg.content)
+                                    yield f"data: {json.dumps({'type': 'thinking', 'message': content_str[:120]}, ensure_ascii=False)}\n\n"
+                                    yield f"data: {json.dumps({'type': 'content', 'delta': content_str}, ensure_ascii=False)}\n\n"
                         elif isinstance(msg, ToolMessage):
                             payload = {
                                 "type": "tool_result",
-                                "result": str(msg.content),
+                                "result": _safe_str(msg.content),
                                 "tool_call_id": getattr(msg, "tool_call_id", ""),
                             }
                             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

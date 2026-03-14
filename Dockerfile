@@ -13,6 +13,10 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
+# 切换为阿里云 apt 镜像源（加速国内网络）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+
 # 安装构建依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -21,15 +25,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # 先复制依赖文件（利用 Docker 层缓存：依赖不变则不重新安装）
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --prefix=/install \
+RUN pip install --no-cache-dir --prefix=/install \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    --trusted-host mirrors.aliyun.com \
     fastapi uvicorn[standard] \
     openai httpx \
     pydantic pydantic-settings \
     sqlalchemy aiosqlite asyncpg \
     structlog \
     tiktoken \
-    langgraph langchain-core langchain-openai \
+    langgraph \
+    langgraph-checkpoint \
+    "langgraph-checkpoint-sqlite<3.0.0" \
+    langchain-core langchain-openai \
     python-dotenv jinja2 \
     prometheus-client
 
@@ -43,6 +51,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8001
 
 WORKDIR /app
+
+# 切换为阿里云 apt 镜像源（加速国内网络）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 # 安装运行时系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -74,4 +86,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/api/v1/health || exit 1
 
 # 启动命令
-CMD ["python", "-m", "my_agent.main"]
+CMD ["uvicorn", "my_agent.main:app", "--host", "0.0.0.0", "--port", "8001"]

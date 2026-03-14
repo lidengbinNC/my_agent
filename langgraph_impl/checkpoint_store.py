@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +32,10 @@ CHECKPOINT_DB_PATH = str(_PROJECT_ROOT / "lg_checkpoints.db")
 
 # 模块级单例
 _checkpointer: Any = None          # SqliteSaver 实例
-_conversation_app: Any = None      # 带 checkpoint 的对话图（编译后）
+_saver_cm: Any = None              # AsyncSqliteSaver 上下文管理器（用于 shutdown 时关闭连接）
+_conversation_app: Any = None      # 带 checkpoint 的简单对话图（编译后）
 _review_app: Any = None            # 带 HitL 的审核图（编译后）
+_react_app: Any = None             # 带 checkpoint 的 ReAct Agent 图（编译后）
 
 
 def get_checkpointer() -> Any:
@@ -61,51 +62,71 @@ def get_review_app() -> Any:
     return _review_app
 
 
+def get_react_app() -> Any:
+    """获取全局 ReAct Agent 图实例（带 SqliteSaver checkpoint）。
+
+    面试考点：
+      - 图必须是应用级单例，不能每次请求都 compile_react_graph()
+      - 每次 compile 会创建新图实例，虽然 checkpointer 是单例，
+        但新图实例不知道"上一次请求用的是哪个图实例"，无法正确加载历史
+      - 单例图 + 单例 checkpointer + 相同 thread_id = 跨请求状态持久化
+    """
+    if _react_app is None:
+        raise RuntimeError("ReAct graph 未初始化，请先调用 init_checkpointer()。")
+    return _react_app
+
+
+
+
 async def init_checkpointer() -> None:
     """初始化 AsyncSqliteSaver 和所有图实例。在 FastAPI lifespan startup 阶段调用。
 
     面试考点：
-      - AsyncSqliteSaver 使用 aiosqlite 异步驱动，需要先建立 aiosqlite.Connection
-      - 两张图共享同一个 checkpointer 实例，通过 thread_id 隔离不同会话
-      - setup() 是异步方法，负责创建 SQLite 表（checkpoints / checkpoint_blobs / checkpoint_writes）
+      - AsyncSqliteSaver.from_conn_string() 是官方推荐的初始化方式，内部管理连接
+      - 所有图共享同一个 checkpointer 实例，通过 thread_id 隔离不同会话
+      - setup() 是异步方法，负责创建 SQLite 表（checkpoints / writes）
+      - 图实例必须是单例：同一个图实例 + 同一个 checkpointer + 相同 thread_id
+        才能正确加载历史 checkpoint，每次请求重新 compile 会丢失 checkpoint 关联
     """
-    global _checkpointer, _conversation_app, _review_app
+    global _checkpointer, _conversation_app, _review_app, _react_app, _saver_cm
 
-    import aiosqlite
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from langgraph_impl.checkpoint_demo import (
         build_conversation_graph_with_checkpoint,
         build_human_review_graph,
     )
+    from langgraph_impl.react_agent import compile_react_graph
 
-    # 手动创建 aiosqlite 连接，保持连接在整个应用生命周期内存活
-    conn = await aiosqlite.connect(CHECKPOINT_DB_PATH)
-    saver = AsyncSqliteSaver(conn)
-    # setup() 创建 SQLite 表结构（幂等，已存在则跳过）
-    await saver.setup()
+    # 使用官方推荐的 from_conn_string() 上下文管理器方式初始化
+    # __aenter__ 内部会建立 aiosqlite 连接并调用 setup()
+    _saver_cm = AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB_PATH)
+    saver = await _saver_cm.__aenter__()
     _checkpointer = saver
 
-    # 用同一个 checkpointer 编译两张图
+    # 所有图共享同一个 checkpointer，通过 thread_id 隔离会话
     _conversation_app = build_conversation_graph_with_checkpoint(checkpointer=saver)
     _review_app = build_human_review_graph(checkpointer=saver)
+    _react_app = compile_react_graph(checkpointer=saver)
 
     logger.info(
         "lg_checkpointer_initialized",
         db_path=CHECKPOINT_DB_PATH,
         backend="AsyncSqliteSaver",
+        graphs=["conversation", "review", "react"],
     )
 
 
 async def shutdown_checkpointer() -> None:
     """关闭 AsyncSqliteSaver 连接。在 FastAPI lifespan shutdown 阶段调用。"""
-    global _checkpointer, _conversation_app, _review_app
-    if _checkpointer is not None:
+    global _checkpointer, _conversation_app, _review_app, _react_app, _saver_cm
+    if _saver_cm is not None:
         try:
-            # 关闭底层 aiosqlite 连接
-            await _checkpointer.conn.close()
+            await _saver_cm.__aexit__(None, None, None)
             logger.info("lg_checkpointer_closed")
         except Exception as e:
             logger.warning("lg_checkpointer_close_error", error=str(e))
     _checkpointer = None
+    _saver_cm = None
     _conversation_app = None
     _review_app = None
+    _react_app = None

@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 @dataclass
 class DifyConfig:
     """Dify 连接配置。"""
-    base_url: str = "http://localhost:8080"   # Dify 服务地址
+    base_url: str = "http://localhost:8088"   # Dify 服务地址
     api_key: str = ""                          # 应用 API Key（从 Dify 控制台获取）
     timeout: float = 60.0
     max_retries: int = 2
@@ -315,7 +315,7 @@ def create_dify_client(
     """从环境变量或参数创建 Dify 客户端。"""
     import os
     config = DifyConfig(
-        base_url=base_url or os.getenv("DIFY_BASE_URL", "http://localhost:8080"),
+        base_url=base_url or os.getenv("DIFY_BASE_URL", "http://localhost:8088"),
         api_key=api_key or os.getenv("DIFY_API_KEY", ""),
     )
     return DifyClient(config)

@@ -35,6 +35,7 @@ let defaultPlanAgentId = null; // 服务端预创建的 Plan-and-Execute Agent I
 let selectedScenario = 'research_report'; // 默认多 Agent 场景
 let useLangGraph = false;    // 是否使用 LangGraph 引擎
 let lgMode = 'react';        // LangGraph 运行模式
+let lgThreadId = null;       // LangGraph 会话 ID，跨请求保持 checkpoint 连续性
 
 // 启动时拉取默认 Plan Agent ID
 (async () => {
@@ -177,6 +178,7 @@ newSessionBtn.addEventListener('click', () => {
     if (isStreaming) return;
 
     currentSessionId = null;
+    lgThreadId = null;       // 新建会话时同步重置 LangGraph thread_id
 
     // 重置深度思考按钮状态
     if (deepThinkMode) {
@@ -916,14 +918,20 @@ async function streamLangGraph(message) {
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                   d="M13 10V3L4 14h7v7l9-11h-7z"/>
         </svg>
-        <span>LangGraph — ${LG_MODE_LABELS[lgMode] || lgMode}</span>`;
+        <span>LangGraph — ${LG_MODE_LABELS[lgMode] || lgMode}</span>
+        <span class="lg-thread-badge ml-2 text-emerald-500 font-mono opacity-60">${lgThreadId ? '...'+lgThreadId.slice(-8) : ''}</span>`;
     stepsContainer.appendChild(badge);
 
     try {
         const resp = await fetch('/api/v1/langgraph/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ question: message, mode: lgMode, stream: true }),
+            body: JSON.stringify({
+                question: message,
+                mode: lgMode,
+                stream: true,
+                thread_id: lgThreadId || '',   // 携带会话 ID，后端没有时自动生成并通过 SSE 返回
+            }),
         });
 
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -957,6 +965,17 @@ async function streamLangGraph(message) {
                 // 统一事件格式处理
                 const evType = data.type || data.event;
                 switch (evType) {
+                    case 'thread_id':
+                        // 后端返回本次会话的 thread_id（首次自动生成），保存供下次请求续接
+                        if (data.thread_id) {
+                            lgThreadId = data.thread_id;
+                            // 在 badge 上显示 thread_id 后 8 位，方便调试
+                            const threadBadge = msgWrapper.querySelector('.lg-thread-badge');
+                            if (threadBadge) {
+                                threadBadge.textContent = `thread: ...${data.thread_id.slice(-8)}`;
+                            }
+                        }
+                        break;
                     case 'thinking':
                         handleLgThinking(stepsContainer, data);
                         break;
