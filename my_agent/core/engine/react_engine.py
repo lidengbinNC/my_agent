@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator
 
+from my_agent.domain.agent.skill import AgentSkill
 from my_agent.domain.llm.base import BaseLLMClient
 from my_agent.domain.llm.message import (
     AssistantMessage,
@@ -27,6 +28,7 @@ from my_agent.domain.llm.message import (
 )
 from my_agent.domain.prompt.react_prompt import _register_react_prompts  # 确保注册
 from my_agent.domain.prompt.registry import get_prompt_registry
+from my_agent.domain.tool.base import BaseTool
 from my_agent.domain.tool.executor import ToolExecutor
 from my_agent.domain.tool.registry import ToolRegistry
 from my_agent.utils.logger import get_logger
@@ -105,6 +107,7 @@ class ReActEngine:
         self,
         query: str,
         history: list[Message] | None = None,
+        skill: AgentSkill | None = None,
     ) -> AsyncGenerator[ReActStep, None]:
         """执行 ReAct 循环，逐步 yield ReActStep。"""
         start_time = time.monotonic()
@@ -112,15 +115,27 @@ class ReActEngine:
         completion_tokens = 0
 
         # 构建工具描述
-        tools_description = self._build_tools_description()
+        available_tools = self._resolve_available_tools(skill)
+        tools_description = self._build_tools_description(available_tools)
+        if skill:
+            logger.info(
+                "react_skill_activated",
+                skill=skill.name,
+                allowed_tools=[tool.name for tool in available_tools],
+            )
 
         # 构建系统 Prompt
-        #TODO:这里需要了解下，是什么时候，构建的系统提示词的流程
         system_content = self._prompt_registry.render(
             "react_system",
             tools_description=tools_description,
             max_iterations=self._max_iterations,
         )
+        if skill and skill.system_instructions:
+            system_content = (
+                f"{system_content}\n\n"
+                f"## 当前激活技能: {skill.name}\n"
+                f"{skill.system_instructions}"
+            )
 
         budget = self._budget
 
@@ -151,6 +166,8 @@ class ReActEngine:
 
         # ── 第3层：Few-shot + 用户问题 ────────────────────────────────────
         few_shot = self._prompt_registry.render("react_few_shot")
+        if skill and skill.few_shot:
+            few_shot = f"{few_shot}\n\n{skill.few_shot}"
         user_turn = f"{few_shot}\n\n用户问题: {query}"
         user_tokens = count_tokens(user_turn)
         if user_tokens > budget.few_shot_budget:
@@ -258,11 +275,17 @@ class ReActEngine:
             ))
 
             # ---- 执行工具 ----
-            tool_result = await self._executor.execute(
-                action,
-                action_input if isinstance(action_input, dict) else {},
-            )
-            observation = tool_result.to_observation()
+            if skill and skill.has_tool_restrictions and action not in {tool.name for tool in available_tools}:
+                observation = (
+                    f"[ERROR] 工具 '{action}' 不在当前技能 '{skill.name}' 的允许列表中。"
+                    f"允许工具: {[tool.name for tool in available_tools]}"
+                )
+            else:
+                tool_result = await self._executor.execute(
+                    action,
+                    action_input if isinstance(action_input, dict) else {},
+                )
+                observation = tool_result.to_observation()
 
             yield ReActStep(
                 type=ReActStepType.OBSERVATION,
@@ -313,9 +336,20 @@ class ReActEngine:
 
     # ==================== 内部方法 ====================
 
-    def _build_tools_description(self) -> str:
-        """构建工具描述文本，注入到 System Prompt。"""
+    def _resolve_available_tools(self, skill: AgentSkill | None) -> list[BaseTool]:
+        """根据 Skill 过滤当前轮允许使用的工具。"""
         tools = self._registry.all()
+        if not skill or not skill.has_tool_restrictions:
+            return tools
+        allowed = set(skill.allowed_tools)
+        filtered = [tool for tool in tools if tool.name in allowed]
+        missing = sorted(allowed - {tool.name for tool in filtered})
+        if missing:
+            logger.warning("skill_allowed_tools_missing", skill=skill.name, missing=missing)
+        return filtered
+
+    def _build_tools_description(self, tools: list[BaseTool]) -> str:
+        """构建工具描述文本，注入到 System Prompt。"""
         if not tools:
             return "（当前无可用工具）"
         lines: list[str] = []

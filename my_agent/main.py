@@ -121,6 +121,11 @@ async def tasks_page(request: Request):
     return templates.TemplateResponse("tasks.html", {"request": request})
 
 
+@app.get("/mcp", include_in_schema=False)
+async def mcp_page(request: Request):
+    return templates.TemplateResponse("mcp.html", {"request": request})
+
+
 def main() -> None:
     import uvicorn
 

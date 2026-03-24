@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends
@@ -25,12 +24,28 @@ from my_agent.api.schemas.chat import (
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import create_memory, get_guardrails, get_react_engine
 from my_agent.core.engine.react_engine import ReActEngine, ReActStepType
+from my_agent.domain.agent import AgentSkill, get_skill_registry
 from my_agent.domain.guardrails.base import GuardAction
 from my_agent.infrastructure.db.database import get_db
 from my_agent.infrastructure.db.repository import MessageRepository, SessionRepository
-from my_agent.utils.cost_tracker import get_cost_tracker
 
 router = APIRouter(tags=["chat"])
+
+
+@router.get("/skills")
+async def list_skills():
+    registry = get_skill_registry()
+    return {
+        "skills": [
+            {
+                "name": skill.name,
+                "description": skill.description,
+                "allowed_tools": skill.allowed_tools,
+                "trigger_terms": skill.trigger_terms,
+            }
+            for skill in registry.all()
+        ]
+    }
 
 
 @router.post("/chat/completions")
@@ -39,14 +54,27 @@ async def chat_completions(
     engine: ReActEngine = Depends(get_react_engine),
     db: AsyncSession = Depends(get_db),
 ):
+    from fastapi import HTTPException
+
     # ── 输入护栏检查 ──────────────────────────────────────────────
     # output_chain 用于最终回复 PII 脱敏等，流式/非流式路径内使用
     input_chain, output_chain, _ = get_guardrails()
     if input_chain:
         _, guard_result = await input_chain.check(req.message)
         if guard_result and guard_result.action == GuardAction.BLOCK:
-            from fastapi import HTTPException
             raise HTTPException(status_code=400, detail=f"输入被安全护栏拦截: {guard_result.reason}")
+
+    skill_registry = get_skill_registry()
+    active_skill: AgentSkill | None
+    if req.skill:
+        active_skill = skill_registry.get(req.skill)
+        if active_skill is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Skill '{req.skill}' 不存在，可用 Skills: {skill_registry.names()}",
+            )
+    else:
+        active_skill = skill_registry.match(req.message)
 
     # 获取或创建会话
     session_id = req.session_id
@@ -92,7 +120,7 @@ async def chat_completions(
 
     if req.stream:
         return StreamingResponse(
-            _stream_react(engine, req.message, session_id, history, db, output_chain),
+            _stream_react(engine, req.message, session_id, history, db, output_chain, active_skill),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -103,7 +131,7 @@ async def chat_completions(
 
     # 非流式：收集所有步骤
     final_answer = ""
-    async for step in engine.run(req.message, history=history):
+    async for step in engine.run(req.message, history=history, skill=active_skill):
         if step.type == ReActStepType.FINAL_ANSWER:
             final_answer = step.answer
         elif step.type == ReActStepType.ERROR:
@@ -120,6 +148,7 @@ async def chat_completions(
         session_id=session_id,
         content=final_answer,
         usage={},
+        skill=active_skill.name if active_skill else None,
     )
 
 
@@ -130,6 +159,7 @@ async def _stream_react(
     history: list,
     db: AsyncSession,
     output_chain=None,
+    skill: AgentSkill | None = None,
 ) -> AsyncGenerator[str, None]:
     """将 ReAct 步骤转换为 SSE 事件流，并持久化对话记录。"""
     m_repo = MessageRepository(db)
@@ -138,11 +168,15 @@ async def _stream_react(
 
     yield SSEEvent(
         event=SSEEventType.THINKING,
-        data={"session_id": session_id, "message": "Agent 启动，开始推理..."},
+        data={
+            "session_id": session_id,
+            "message": "Agent 启动，开始推理...",
+            "skill": skill.name if skill else None,
+        },
     ).to_sse()
 
     try:
-        async for step in engine.run(query, history=history):
+        async for step in engine.run(query, history=history, skill=skill):
             if step.type == ReActStepType.THINKING:
                 yield SSEEvent(
                     event=SSEEventType.THINKING,
@@ -206,7 +240,11 @@ async def _stream_react(
                     ).to_sse()
                 yield SSEEvent(
                     event=SSEEventType.DONE,
-                    data={"session_id": session_id, "content": answer},
+                    data={
+                        "session_id": session_id,
+                        "content": answer,
+                        "skill": skill.name if skill else None,
+                    },
                 ).to_sse()
                 break
 

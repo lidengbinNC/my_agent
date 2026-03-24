@@ -14,6 +14,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     session_id: str | None = Field(default=None, description="会话 ID，为空则新建")
     stream: bool = Field(default=True, description="是否流式输出")
+    skill: str | None = Field(default=None, description="指定 Skill 名称；为空则自动匹配")
 
 
 class SSEEventType(str, Enum):
@@ -46,3 +47,4 @@ class ChatResponse(BaseModel):
     content: str
     usage: dict[str, int] = Field(default_factory=dict)
     model: str = ""
+    skill: str | None = None

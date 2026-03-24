@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP 管理 — MyAgent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: { 50: '#eef2ff', 100: '#e0e7ff', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca' },
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .tab-btn.active {
+            background: white;
+            color: #4f46e5;
+            box-shadow: 0 1px 4px rgba(0,0,0,.1);
+            font-weight: 600;
+        }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        .tool-card {
+            transition: box-shadow .15s, border-color .15s;
+        }
+        .tool-card:hover {
+            box-shadow: 0 4px 16px rgba(0,0,0,.1);
+            border-color: #a5b4fc;
+        }
+
+        .conn-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 9999px;
+        }
+        .conn-badge.connected { background: #d1fae5; color: #065f46; }
+        .conn-badge.disconnected { background: #fee2e2; color: #991b1b; }
+
+        .json-pre {
+            background: #1e1e2e;
+            color: #cdd6f4;
+            border-radius: 10px;
+            padding: 16px;
+            font-size: 12px;
+            line-height: 1.6;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid #e0e7ff;
+            border-top-color: #4f46e5;
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .status-dot.ok { background: #10b981; }
+        .status-dot.err { background: #ef4444; }
+        .status-dot.idle { background: #94a3b8; }
+    </style>
+</head>
+<body class="h-full bg-gray-50 text-gray-900 flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+                <span class="text-white font-bold text-sm">A</span>
+            </div>
+            <h1 class="text-lg font-semibold text-gray-800">MyAgent</h1>
+            <span class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">v0.1.0</span>
+            <span class="text-gray-300 mx-1">/</span>
+            <span class="text-sm font-medium text-primary-600">MCP 管理</span>
+        </div>
+        <div class="flex items-center gap-2">
+            <a href="/"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+                </svg>
+                对话
+            </a>
+            <a href="/workflow"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                </svg>
+                工作流
+            </a>
+            <a href="/evaluation"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                </svg>
+                评估
+            </a>
+            <a href="/tasks"
+               class="flex items-center gap-1.5 text-xs text-gray-600 hover:text-primary-600 hover:bg-primary-50 px-3 py-1.5 rounded-lg transition-colors border border-gray-200 hover:border-primary-300">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                </svg>
+                任务队列
+            </a>
+            <!-- 服务状态 -->
+            <div id="server-status" class="flex items-center gap-1.5 text-xs text-gray-500 ml-2">
+                <span class="status-dot idle" id="status-dot"></span>
+                <span id="status-text">检测中...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Page Body -->
+    <div class="flex-1 overflow-hidden flex flex-col max-w-6xl w-full mx-auto px-6 py-6 gap-6">
+
+        <!-- Page Title -->
+        <div class="flex items-center justify-between flex-shrink-0">
+            <div>
+                <h2 class="text-xl font-bold text-gray-800">MCP 协议管理</h2>
+                <p class="text-sm text-gray-500 mt-0.5">
+                    Model Context Protocol — 管理 MCP Server 工具暴露 &amp; 连接外部 MCP Server
+                </p>
+            </div>
+            <button id="refresh-btn"
+                    class="flex items-center gap-1.5 text-xs bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg transition-colors">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>
+                刷新
+            </button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex-shrink-0">
+            <div class="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+                <button class="tab-btn active text-sm px-4 py-2 rounded-lg transition-all" data-tab="server">
+                    MCP Server（对外暴露）
+                </button>
+                <button class="tab-btn text-sm px-4 py-2 rounded-lg transition-all text-gray-500 hover:text-gray-700" data-tab="client">
+                    MCP Client（连接外部）
+                </button>
+                <button class="tab-btn text-sm px-4 py-2 rounded-lg transition-all text-gray-500 hover:text-gray-700" data-tab="test">
+                    工具测试
+                </button>
+                <button class="tab-btn text-sm px-4 py-2 rounded-lg transition-all text-gray-500 hover:text-gray-700" data-tab="config">
+                    Cursor 配置
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab Panels -->
+        <div class="flex-1 overflow-y-auto">
+
+            <!-- ── Tab: Server ── -->
+            <div class="tab-panel active" id="tab-server">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                    <!-- 左：统计卡片 -->
+                    <div class="lg:col-span-1 flex flex-col gap-4">
+                        <div class="bg-white rounded-xl border border-gray-200 p-5">
+                            <div class="text-xs text-gray-500 mb-1">已暴露工具数</div>
+                            <div class="text-3xl font-bold text-primary-600" id="tools-count">—</div>
+                            <div class="text-xs text-gray-400 mt-1">通过 MCP 标准接口对外可用</div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-gray-200 p-5">
+                            <div class="text-xs text-gray-500 mb-1">已暴露资源数</div>
+                            <div class="text-3xl font-bold text-emerald-600" id="resources-count">—</div>
+                            <div class="text-xs text-gray-400 mt-1">知识库 / 文档等 MCP Resources</div>
+                        </div>
+                        <div class="bg-white rounded-xl border border-gray-200 p-5">
+                            <div class="text-xs text-gray-500 mb-2">接入端点</div>
+                            <div class="space-y-2 text-xs">
+                                <div class="flex items-center gap-2">
+                                    <span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-mono font-medium">GET</span>
+                                    <code class="text-gray-600">/api/v1/mcp/sse</code>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <span class="bg-green-100 text-green-700 px-2 py-0.5 rounded font-mono font-medium">POST</span>
+                                    <code class="text-gray-600">/api/v1/mcp/messages</code>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 右：工具列表 + 资源列表 -->
+                    <div class="lg:col-span-2 flex flex-col gap-6">
+                        <!-- 工具列表 -->
+                        <div class="bg-white rounded-xl border border-gray-200 p-5">
+                            <h3 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                </svg>
+                                暴露的工具（MCP Tools）
+                            </h3>
+                            <div id="tools-list" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div class="text-sm text-gray-400 col-span-2 py-4 text-center">加载中...</div>
+                            </div>
+                        </div>
+
+                        <!-- 资源列表 -->
+                        <div class="bg-white rounded-xl border border-gray-200 p-5">
+                            <h3 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582 4 8 4s8 1.79 8 4"/>
+                                </svg>
+                                暴露的资源（MCP Resources）
+                            </h3>
+                            <div id="resources-list" class="space-y-2">
+                                <div class="text-sm text-gray-400 py-4 text-center">加载中...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Client ── -->
+            <div class="tab-panel" id="tab-client">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                    <!-- 连接表单 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-5 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                            </svg>
+                            连接外部 MCP Server
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">连接名称</label>
+                                <input id="conn-name" type="text" placeholder="例如：github、slack、my-server"
+                                       class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent placeholder-gray-400"/>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">Server URL</label>
+                                <input id="conn-url" type="text" placeholder="http://localhost:8002"
+                                       class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent placeholder-gray-400 font-mono"/>
+                                <p class="text-xs text-gray-400 mt-1">填入外部 MCP Server 的根地址，将自动连接 /mcp/sse 端点</p>
+                            </div>
+                            <button id="connect-btn"
+                                    class="w-full bg-primary-600 hover:bg-primary-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                                </svg>
+                                连接并发现工具
+                            </button>
+                            <div id="connect-result" class="hidden rounded-lg p-3 text-sm"></div>
+                        </div>
+
+                        <!-- 快捷示例 -->
+                        <div class="mt-6 pt-5 border-t border-gray-100">
+                            <div class="text-xs font-medium text-gray-500 mb-3">快捷示例</div>
+                            <div class="space-y-2">
+                                <button class="quick-connect w-full text-left text-xs border border-gray-200 rounded-lg px-3 py-2 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+                                        data-name="myagent-self" data-url="http://localhost:8001">
+                                    <span class="font-medium text-gray-700">MyAgent 自身</span>
+                                    <span class="text-gray-400 ml-2">http://localhost:8001</span>
+                                </button>
+                                <button class="quick-connect w-full text-left text-xs border border-gray-200 rounded-lg px-3 py-2 hover:border-primary-300 hover:bg-primary-50 transition-colors"
+                                        data-name="myrag" data-url="http://localhost:8000">
+                                    <span class="font-medium text-gray-700">MyRAG</span>
+                                    <span class="text-gray-400 ml-2">http://localhost:8000</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 已连接列表 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-5 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                            </svg>
+                            已连接的 MCP Server
+                        </h3>
+                        <div id="connections-list">
+                            <div class="text-sm text-gray-400 py-8 text-center">暂无连接</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Test ── -->
+            <div class="tab-panel" id="tab-test">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                    <!-- 调用表单 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-5 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            调用 MCP 工具
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">选择工具</label>
+                                <select id="test-tool-select"
+                                        class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white">
+                                    <option value="">— 请先加载工具列表 —</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-600 mb-1.5">
+                                    参数（JSON 格式）
+                                    <span id="test-tool-schema" class="text-gray-400 font-normal ml-2"></span>
+                                </label>
+                                <textarea id="test-args" rows="6"
+                                          placeholder='{"query": "hello world"}'
+                                          class="w-full text-sm font-mono border border-gray-300 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none placeholder-gray-400"></textarea>
+                            </div>
+                            <button id="test-call-btn"
+                                    class="w-full bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                                执行调用
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 结果 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6 flex flex-col">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            </svg>
+                            调用结果
+                            <span id="test-status-badge" class="hidden ml-auto conn-badge"></span>
+                        </h3>
+                        <div id="test-result-wrap" class="flex-1">
+                            <div class="text-sm text-gray-400 py-8 text-center">执行工具后结果显示在这里</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Config ── -->
+            <div class="tab-panel" id="tab-config">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                    <!-- stdio 配置 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                                </svg>
+                                stdio 传输配置
+                                <span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">本地进程</span>
+                            </h3>
+                            <button class="copy-btn text-xs text-primary-600 hover:text-primary-700 border border-primary-200 hover:border-primary-400 px-3 py-1 rounded-lg transition-colors"
+                                    data-target="stdio-config-pre">
+                                复制
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-3">
+                            将以下内容复制到 <code class="bg-gray-100 px-1 rounded">~/.cursor/mcp.json</code>，
+                            Cursor 将直接启动本地 Python 进程作为 MCP Server。
+                        </p>
+                        <pre id="stdio-config-pre" class="json-pre">加载中...</pre>
+                    </div>
+
+                    <!-- SSE 配置 -->
+                    <div class="bg-white rounded-xl border border-gray-200 p-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                          d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                                </svg>
+                                SSE 传输配置
+                                <span class="text-xs bg-blue-50 text-blue-600 px-2 py-0.5 rounded">远程 HTTP</span>
+                            </h3>
+                            <button class="copy-btn text-xs text-primary-600 hover:text-primary-700 border border-primary-200 hover:border-primary-400 px-3 py-1 rounded-lg transition-colors"
+                                    data-target="sse-config-pre">
+                                复制
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-3">
+                            服务已运行时，使用 SSE 传输让 Cursor 连接到正在运行的 HTTP 服务。
+                        </p>
+                        <pre id="sse-config-pre" class="json-pre">加载中...</pre>
+                    </div>
+
+                    <!-- 说明 -->
+                    <div class="lg:col-span-2 bg-primary-50 border border-primary-100 rounded-xl p-5">
+                        <h3 class="text-sm font-semibold text-primary-700 mb-3 flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            接入说明
+                        </h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-primary-800">
+                            <div>
+                                <div class="font-medium mb-1">stdio 传输（推荐本地开发）</div>
+                                <ol class="space-y-1 text-primary-700 list-decimal list-inside">
+                                    <li>复制 stdio 配置到 <code class="bg-primary-100 px-1 rounded">~/.cursor/mcp.json</code></li>
+                                    <li>修改 <code class="bg-primary-100 px-1 rounded">cwd</code> 为项目实际路径</li>
+                                    <li>填入 <code class="bg-primary-100 px-1 rounded">LLM_API_KEY</code></li>
+                                    <li>重启 Cursor，在 Agent 模式下即可使用 MyAgent 工具</li>
+                                </ol>
+                            </div>
+                            <div>
+                                <div class="font-medium mb-1">SSE 传输（推荐远程/生产）</div>
+                                <ol class="space-y-1 text-primary-700 list-decimal list-inside">
+                                    <li>启动 MyAgent 服务（<code class="bg-primary-100 px-1 rounded">uvicorn my_agent.main:app</code>）</li>
+                                    <li>复制 SSE 配置到 <code class="bg-primary-100 px-1 rounded">~/.cursor/mcp.json</code></li>
+                                    <li>修改 URL 为实际服务地址</li>
+                                    <li>重启 Cursor 即可连接</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- end tab panels -->
+    </div><!-- end page body -->
+
+    <script src="/static/js/mcp.js"></script>
+</body>
+</html>
