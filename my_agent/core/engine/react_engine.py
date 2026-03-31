@@ -3,7 +3,7 @@
 面试考点:
   - ReAct 论文核心: Reasoning（思考）+ Acting（行动）交替进行
   - 停止条件: max_iterations / final_answer / 超时 / 成本上限
-  - LLM 输出解析: JSON 模式 + 正则兜底
+  - LLM 输出解析: 原生 Tool Calling 优先 + JSON/文本兜底
   - AsyncGenerator: 逐步 yield ReActStep，驱动 SSE 实时推送
   - 工具调用闭环: LLM 决策 → 工具执行 → Observation 注入 → 继续推理
 """
@@ -17,12 +17,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator
 
+from my_agent.config.settings import settings
 from my_agent.domain.agent.skill import AgentSkill
-from my_agent.domain.llm.base import BaseLLMClient
+from my_agent.domain.guardrails.chain import GuardChain, build_default_output_chain
+from my_agent.domain.llm.base import BaseLLMClient, LLMResponse
 from my_agent.domain.llm.message import (
     AssistantMessage,
     Message,
     SystemMessage,
+    ToolMessage,
     ToolCallInfo,
     UserMessage,
 )
@@ -95,6 +98,7 @@ class ReActEngine:
         max_iterations: int = 5,
         tool_timeout: float = 30.0,
         budget: ContextBudget | None = None,
+        observation_guard: GuardChain | None = None,
     ) -> None:
         self._llm = llm
         self._registry = tool_registry
@@ -102,6 +106,9 @@ class ReActEngine:
         self._max_iterations = max_iterations
         self._prompt_registry = get_prompt_registry()
         self._budget = budget or build_context_budget()
+        self._observation_guard = observation_guard
+        if self._observation_guard is None and settings.guardrails_enabled:
+            self._observation_guard = build_default_output_chain()
 
     async def run(
         self,
@@ -117,6 +124,7 @@ class ReActEngine:
         # 构建工具描述
         available_tools = self._resolve_available_tools(skill)
         tools_description = self._build_tools_description(available_tools)
+        llm_tools = [tool.to_openai_tool() for tool in available_tools]
         if skill:
             logger.info(
                 "react_skill_activated",
@@ -210,8 +218,8 @@ class ReActEngine:
             try:
                 response = await self._llm.chat(
                     messages,
+                    tools=llm_tools or None,
                     temperature=0.2,  # 低温度提升 JSON 输出稳定性
-                    response_format={"type": "json_object"},
                 )
             except Exception as e:
                 yield ReActStep(type=ReActStepType.ERROR, error=str(e), iteration=iteration)
@@ -225,9 +233,9 @@ class ReActEngine:
             raw_output = response.content or ""
             logger.debug("react_llm_output", iteration=iteration, raw=raw_output[:300])
 
-            # ---- 解析 LLM 输出 ----
-            parsed = self._parse_llm_output(raw_output)
-            if parsed is None:
+            # ---- 解析 LLM 输出 / Tool Call ----
+            decision = self._extract_response_decision(response, iteration)
+            if decision is None:
                 yield ReActStep(
                     type=ReActStepType.ERROR,
                     error=f"LLM 输出解析失败: {raw_output[:200]}",
@@ -235,13 +243,15 @@ class ReActEngine:
                 )
                 return
 
-            thought = parsed.get("thought", "")
-            action = parsed.get("action", "")
-            action_input = parsed.get("action_input", {})
+            thought = decision["thought"]
+            action = decision["action"]
+            action_input = decision["action_input"]
+            raw_action_input = decision["raw_action_input"]
+            tool_call_id = decision["tool_call_id"] or f"call_{iteration}"
 
             # ---- 最终答案 ----
             if action == "final_answer":
-                answer = action_input.get("answer", "") if isinstance(action_input, dict) else str(action_input)
+                answer = decision["answer"]
                 yield ReActStep(
                     type=ReActStepType.FINAL_ANSWER,
                     thought=thought,
@@ -264,13 +274,12 @@ class ReActEngine:
             )
 
             # 将 Assistant 消息加入历史（含 tool_calls）
-            tool_call_id = f"call_{iteration}"
             messages.append(AssistantMessage(
-                content=raw_output,
+                content=response.content,
                 tool_calls=[ToolCallInfo(
                     id=tool_call_id,
                     name=action,
-                    arguments=json.dumps(action_input, ensure_ascii=False),
+                    arguments=self._serialize_tool_arguments(raw_action_input),
                 )],
             ))
 
@@ -283,9 +292,10 @@ class ReActEngine:
             else:
                 tool_result = await self._executor.execute(
                     action,
-                    action_input if isinstance(action_input, dict) else {},
+                    raw_action_input,
                 )
                 observation = tool_result.to_observation()
+            observation = await self._sanitize_observation(observation, action)
 
             yield ReActStep(
                 type=ReActStepType.OBSERVATION,
@@ -295,7 +305,6 @@ class ReActEngine:
             )
 
             # 将 Observation 注入消息历史
-            from my_agent.domain.llm.message import ToolMessage
             messages.append(ToolMessage(content=observation, tool_call_id=tool_call_id))
 
             # ── 迭代内预算检查：每次注入 Observation 后检查剩余空间 ──────
@@ -316,22 +325,22 @@ class ReActEngine:
                     current_tokens=current_tokens,
                     remaining=remaining,
                 )
-                yield ReActStep(
-                    type=ReActStepType.ERROR,
-                    error=(
-                        f"上下文预算不足，已在第 {iteration} 次迭代后提前终止。"
-                        f"当前已用 {current_tokens} tokens，"
-                        f"剩余 {remaining} tokens 不足以继续推理（需要 {budget.iteration_budget}）。"
-                    ),
+                yield await self._summarize_with_current_context(
+                    messages,
                     iteration=iteration,
+                    reason=(
+                        f"上下文预算不足，已在第 {iteration} 次迭代后停止继续调用工具。"
+                        f"当前已用 {current_tokens} tokens，"
+                        f"剩余 {remaining} tokens 不足以支撑下一轮完整推理。"
+                    ),
                 )
                 return
 
-        # 超出最大迭代次数
-        yield ReActStep(
-            type=ReActStepType.ERROR,
-            error=f"已达到最大迭代次数 {self._max_iterations}，任务未完成",
+        # 超出最大迭代次数后，做最后总结
+        yield await self._summarize_with_current_context(
+            messages,
             iteration=self._max_iterations,
+            reason=f"已达到最大迭代次数 {self._max_iterations}，请基于已有 observation 收敛并给出最终答案。",
         )
 
     # ==================== 内部方法 ====================
@@ -361,6 +370,169 @@ class ReActEngine:
             )
             lines.append(f"- **{t.name}**: {t.description}\n  参数: {param_desc or '无'}")
         return "\n".join(lines)
+
+    def _extract_response_decision(
+        self,
+        response: LLMResponse,
+        iteration: int,
+    ) -> dict[str, Any] | None:
+        """从 LLM 响应中提取本轮决策。
+
+        优先读取原生 tool_calls；若没有，再兼容旧版 JSON；最后兜底纯文本 final answer。
+        """
+        raw_output = (response.content or "").strip()
+
+        if response.tool_calls:
+            if len(response.tool_calls) > 1:
+                logger.warning(
+                    "react_multiple_tool_calls_detected",
+                    iteration=iteration,
+                    count=len(response.tool_calls),
+                )
+            tool_call = response.tool_calls[0]
+            return {
+                "thought": raw_output,
+                "action": tool_call.name,
+                "action_input": self._safe_parse_action_input(tool_call.arguments),
+                "raw_action_input": tool_call.arguments,
+                "tool_call_id": tool_call.id,
+                "answer": "",
+            }
+
+        parsed = self._parse_llm_output(raw_output) if raw_output else None
+        if parsed is not None:
+            thought = str(parsed.get("thought", "") or "")
+            action = str(parsed.get("action", "") or "")
+            action_input = parsed.get("action_input", {})
+            parsed_input = action_input if isinstance(action_input, dict) else {}
+            raw_action_input: str | dict[str, Any]
+            if isinstance(action_input, dict):
+                raw_action_input = action_input
+            else:
+                raw_action_input = json.dumps(action_input, ensure_ascii=False)
+            answer = ""
+            if action == "final_answer":
+                answer = (
+                    action_input.get("answer", "")
+                    if isinstance(action_input, dict)
+                    else str(action_input)
+                )
+            return {
+                "thought": thought,
+                "action": action,
+                "action_input": parsed_input,
+                "raw_action_input": raw_action_input,
+                "tool_call_id": None,
+                "answer": answer,
+            }
+
+        if raw_output:
+            return {
+                "thought": "",
+                "action": "final_answer",
+                "action_input": {"answer": raw_output},
+                "raw_action_input": {"answer": raw_output},
+                "tool_call_id": None,
+                "answer": raw_output,
+            }
+        return None
+
+    async def _sanitize_observation(self, observation: str, tool_name: str) -> str:
+        """对 Observation 做统一过滤，避免敏感结果直接注入下一轮上下文。"""
+        if not self._observation_guard or not observation:
+            return observation
+        sanitized, result = await self._observation_guard.check(
+            observation,
+            context={"phase": "observation", "tool": tool_name},
+        )
+        if result and result.is_blocked:
+            return (
+                "[FILTERED] 工具输出因安全策略被拦截，未向模型暴露原始结果。"
+                f"原因: {result.reason or '未提供'}"
+            )
+        return sanitized
+
+    async def _summarize_with_current_context(
+        self,
+        messages: list[Message],
+        *,
+        iteration: int,
+        reason: str,
+    ) -> ReActStep:
+        """在无法继续迭代时，强制 LLM 基于现有 observation 做最终总结。"""
+        summary_prompt = self._prompt_registry.render(
+            "react_force_final_answer",
+            reason=reason,
+        )
+        summary_messages = self._build_summary_messages(messages, summary_prompt)
+        try:
+            response = await self._llm.chat(
+                summary_messages,
+                temperature=0.1,
+                max_tokens=self._budget.output_budget,
+            )
+        except Exception as e:
+            return ReActStep(
+                type=ReActStepType.ERROR,
+                error=f"{reason} 最终总结失败: {e}",
+                iteration=iteration,
+            )
+
+        thought, answer = self._extract_final_answer(response.content or "")
+        if not answer:
+            return ReActStep(
+                type=ReActStepType.ERROR,
+                error=f"{reason} 最终总结为空，未能生成答案。",
+                iteration=iteration,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
+            )
+        return ReActStep(
+            type=ReActStepType.FINAL_ANSWER,
+            thought=thought or reason,
+            answer=answer,
+            iteration=iteration,
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+        )
+
+    def _build_summary_messages(self, messages: list[Message], prompt: str) -> list[Message]:
+        """构建总结轮输入；若超预算，逐步裁剪最早的非 system 消息。"""
+        summary_messages = [*messages, UserMessage(prompt)]
+        while len(summary_messages) > 2 and count_messages_tokens(summary_messages) > self._budget.total_input_budget:
+            summary_messages.pop(1)
+        return summary_messages
+
+    @staticmethod
+    def _extract_final_answer(raw: str) -> tuple[str, str]:
+        raw = raw.strip()
+        if not raw:
+            return "", ""
+        parsed = ReActEngine._parse_llm_output(raw)
+        if parsed and parsed.get("action") == "final_answer":
+            thought = str(parsed.get("thought", "") or "")
+            action_input = parsed.get("action_input", {})
+            answer = (
+                action_input.get("answer", "")
+                if isinstance(action_input, dict)
+                else str(action_input)
+            )
+            return thought, answer
+        return "", raw
+
+    @staticmethod
+    def _safe_parse_action_input(arguments: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(arguments)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    @staticmethod
+    def _serialize_tool_arguments(arguments: str | dict[str, Any]) -> str:
+        if isinstance(arguments, dict):
+            return json.dumps(arguments, ensure_ascii=False)
+        return arguments
 
     @staticmethod
     def _parse_llm_output(raw: str) -> dict[str, Any] | None:
