@@ -16,7 +16,17 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from my_agent.api.middleware.tracing import TracingMiddleware
-from my_agent.api.routes import agent, chat, health, multi_agent, observability, session, tool, workflow
+from my_agent.api.routes import (
+    agent,
+    chat,
+    customer_service,
+    health,
+    multi_agent,
+    observability,
+    session,
+    tool,
+    workflow,
+)
 from my_agent.api.routes import tasks as tasks_router
 from my_agent.api.routes import evaluation as eval_router
 from my_agent.api.routes import langgraph_routes
@@ -84,6 +94,7 @@ app.add_middleware(TracingMiddleware)
 # ----- 路由 -----
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(customer_service.router, prefix="/api/v1")
 app.include_router(tool.router, prefix="/api/v1")
 app.include_router(session.router, prefix="/api/v1")
 app.include_router(agent.router, prefix="/api/v1")

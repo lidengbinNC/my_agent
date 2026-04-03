@@ -30,6 +30,8 @@ class TaskType(str, Enum):
     EVAL_SINGLE = "eval_single"       # 单任务评估
     EVAL_BATCH = "eval_batch"         # 批量评估
     EVAL_COMPARE = "eval_compare"     # 对比评估
+    CUSTOMER_SERVICE_COPILOT = "customer_service_copilot"   # 客服 Copilot 异步任务
+    AFTER_SALES_TICKET_DRAFT = "after_sales_ticket_draft"   # 售后工单草稿异步任务
 
 
 class TaskCreate(BaseModel):

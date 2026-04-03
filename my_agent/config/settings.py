@@ -104,6 +104,17 @@ class Settings(BaseSettings):
     guardrails_enabled: bool = True
     guardrails_tool_rate_limit: int = 20    # 工具每分钟最大调用次数
 
+    # --- 客服融合配置 ---
+    customer_service_mock_mode: bool = True
+    customer_service_write_enabled: bool = False
+    customer_service_timeout_seconds: int = 10
+    customer_service_api_base_url: str = ""
+    customer_service_api_key: str = ""
+    customer_service_myrag_base_url: str = "http://localhost:8000"
+    customer_service_myrag_api_key: str = ""
+    customer_service_default_knowledge_domain: str = "faq"
+    customer_service_default_knowledge_base: str = ""
+
     # --- 成本控制 ---
     daily_budget_usd: float = 5.0
     cost_exceed_action: str = "warn"        # warn / block

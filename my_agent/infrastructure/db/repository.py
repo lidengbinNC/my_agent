@@ -17,7 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from my_agent.domain.llm.message import Message, MessageRole
-from my_agent.infrastructure.db.models import MessageModel, SessionModel, ToolCallModel
+from my_agent.infrastructure.db.models import (
+    ApprovalRecordModel,
+    CustomerServiceFeedbackModel,
+    MessageModel,
+    SessionModel,
+    ToolCallModel,
+)
 from my_agent.utils.token_counter import count_tokens
 
 
@@ -143,3 +149,83 @@ class ToolCallRepository:
         self._db.add(tc)
         await self._db.flush()
         return tc
+
+
+class ApprovalRecordRepository:
+    """审批记录数据访问对象。"""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def add(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        checkpoint_id: str,
+        stage: str,
+        decision: str,
+        feedback: str = "",
+    ) -> ApprovalRecordModel:
+        record = ApprovalRecordModel(
+            run_id=run_id,
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            stage=stage,
+            decision=decision,
+            feedback=feedback,
+        )
+        self._db.add(record)
+        await self._db.flush()
+        return record
+
+    async def list_by_run_id(self, run_id: str) -> list[ApprovalRecordModel]:
+        result = await self._db.execute(
+            select(ApprovalRecordModel)
+            .where(ApprovalRecordModel.run_id == run_id)
+            .order_by(ApprovalRecordModel.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+
+class CustomerServiceFeedbackRepository:
+    """客服反馈数据访问对象。"""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def add(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        customer_id: str,
+        knowledge_domain: str,
+        adopted: bool,
+        rating: int,
+        feedback_type: str,
+        feedback_text: str = "",
+        metadata_json: str = "",
+    ) -> CustomerServiceFeedbackModel:
+        item = CustomerServiceFeedbackModel(
+            session_id=session_id,
+            run_id=run_id,
+            customer_id=customer_id,
+            knowledge_domain=knowledge_domain,
+            adopted=adopted,
+            rating=rating,
+            feedback_type=feedback_type,
+            feedback_text=feedback_text,
+            metadata_json=metadata_json,
+        )
+        self._db.add(item)
+        await self._db.flush()
+        return item
+
+    async def list_recent(self, limit: int = 50) -> list[CustomerServiceFeedbackModel]:
+        result = await self._db.execute(
+            select(CustomerServiceFeedbackModel)
+            .order_by(CustomerServiceFeedbackModel.created_at.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())

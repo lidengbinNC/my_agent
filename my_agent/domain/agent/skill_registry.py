@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from my_agent.domain.agent.skill import AgentSkill
+from my_agent.domain.customer_service import READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES
 from my_agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -110,6 +111,76 @@ def _register_builtin_skills() -> None:
         trigger_terms=["token", "budget", "上下文", "溢出", "trim", "裁剪"],
         allowed_tools=["web_search"],
         priority=90,
+    ))
+
+    registry.register(AgentSkill(
+        name="customer-service-copilot",
+        description="海外客服坐席辅助：知识检索、订单物流查询、会话总结与推荐回复。",
+        system_instructions=(
+            "你当前处于客服 Copilot 模式。\n"
+            "优先通过知识、订单、物流、会话历史工具补齐证据。\n"
+            "回答要适合坐席使用，输出建议回复、证据来源、风险提示和下一步动作。"
+        ),
+        few_shot=(
+            "技能提示：优先输出 1）问题判断 2）推荐回复 3）证据来源 4）下一步动作。\n"
+            "除非明确允许，否则不要发起任何写操作。"
+        ),
+        trigger_terms=["客服", "客户", "copilot", "推荐回复", "物流", "退款", "售后"],
+        allowed_tools=READ_ONLY_TOOL_NAMES,
+        priority=120,
+    ))
+
+    registry.register(AgentSkill(
+        name="pre-sales-consulting",
+        description="售前咨询：商品、FAQ、政策、推荐回答。",
+        system_instructions=(
+            "你当前处于售前咨询模式。\n"
+            "优先使用知识检索和客户画像工具，给出简洁、可直接发送的回复建议。"
+        ),
+        few_shot="技能提示：售前问题优先知识引用，不随意承诺补偿或退款。",
+        trigger_terms=["售前", "购买前", "商品咨询", "价格", "优惠", "活动"],
+        allowed_tools=READ_ONLY_TOOL_NAMES,
+        priority=110,
+    ))
+
+    registry.register(AgentSkill(
+        name="after-sales-triage",
+        description="售后分流：订单、物流、退款、工单前置判断。",
+        system_instructions=(
+            "你当前处于售后分流模式。\n"
+            "需要先判断是物流、退款、质量、投诉还是其他售后问题，再给出分流建议。"
+        ),
+        few_shot="技能提示：先查订单/物流/退款，再决定是否建议建工单。",
+        trigger_terms=["售后", "退款", "退货", "物流", "没收到", "坏了", "补发"],
+        allowed_tools=READ_ONLY_TOOL_NAMES,
+        priority=115,
+    ))
+
+    registry.register(AgentSkill(
+        name="ticket-assistant",
+        description="工单助手：整理问题摘要、分类、优先级和建单草稿。",
+        system_instructions=(
+            "你当前处于工单助手模式。\n"
+            "请优先整理标题、分类、优先级、摘要、证据和需补充字段。\n"
+            "如果允许写操作，可调用工单工具，但必须标记审批需求。"
+        ),
+        few_shot="技能提示：输出建单草稿时，字段要完整，可直接给人工审核。",
+        trigger_terms=["工单", "建单", "ticket", "升级工单", "售后单"],
+        allowed_tools=[*READ_ONLY_TOOL_NAMES, *WRITE_TOOL_NAMES],
+        priority=118,
+    ))
+
+    registry.register(AgentSkill(
+        name="complaint-review",
+        description="投诉识别与升级建议：识别高风险投诉并生成审批建议。",
+        system_instructions=(
+            "你当前处于投诉复核模式。\n"
+            "重点识别情绪升级、赔付诉求、舆情风险和跨部门升级信号。"
+        ),
+        few_shot="技能提示：投诉场景必须输出风险等级、建议动作和人工审批说明。",
+        trigger_terms=["投诉", "申诉", "赔偿", "差评", "维权", "舆情"],
+        allowed_tools=[*READ_ONLY_TOOL_NAMES, *WRITE_TOOL_NAMES],
+        priority=125,
     ))
 
 

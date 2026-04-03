@@ -11,6 +11,11 @@ from __future__ import annotations
 from my_agent.evaluation.dataset import get_benchmark_dataset
 from my_agent.evaluation.models import AgentTypeLabel, TaskDifficulty
 from my_agent.evaluation.runner import EvalRunner
+from my_agent.domain.customer_service import (
+    build_customer_service_message,
+    resolve_skill_name,
+)
+from my_agent.domain.agent import get_skill_registry
 from my_agent.tasks.models import TaskRecord, TaskType
 from my_agent.tasks.queue import TaskQueue
 from my_agent.utils.logger import get_logger
@@ -169,10 +174,73 @@ async def handle_agent_chat(task: TaskRecord, queue: TaskQueue) -> None:
     }
 
 
+async def handle_customer_service_task(task: TaskRecord, queue: TaskQueue) -> None:
+    """处理客服 Copilot / 工单草稿异步任务。"""
+    from my_agent.core.dependencies import get_react_engine
+    from my_agent.core.engine.react_engine import ReActRunControl, ReActStepType
+
+    payload = task.payload
+    message = payload.get("message", "")
+    mode = payload.get("mode", "copilot")
+    allow_write_actions = bool(payload.get("allow_write_actions", False))
+    customer_context = payload.get("customer_context", {}) or {}
+    if not message:
+        raise ValueError("message 不能为空")
+
+    await queue.update_progress(task, 5, "准备客服上下文...")
+    prompt = build_customer_service_message(
+        message,
+        context=customer_context,
+        mode=mode,
+        allow_write_actions=allow_write_actions,
+    )
+    skill_name = resolve_skill_name(mode)
+    skill = get_skill_registry().get(skill_name) if skill_name else None
+    control = ReActRunControl(
+        approval_before_tools=allow_write_actions or mode in {"ticket_draft", "complaint_review"},
+    )
+
+    await queue.update_progress(task, 15, "开始客服 Copilot 推理...")
+    react_engine = get_react_engine()
+    final_answer = ""
+    paused = None
+    steps = []
+    async for step in react_engine.run(prompt, skill=skill, control=control):
+        steps.append({"type": step.type.value, "iteration": step.iteration})
+        if step.type == ReActStepType.THINKING:
+            await queue.update_progress(task, min(15 + step.iteration * 10, 85), f"第 {step.iteration} 步推理中...")
+        elif step.type == ReActStepType.PAUSED:
+            paused = {
+                "checkpoint_id": step.checkpoint_id,
+                "pause_reason": step.pause_reason,
+                "requires_approval": step.requires_approval,
+                "action": step.action,
+                "action_input": step.action_input,
+                "answer_preview": step.answer,
+                "data": step.data,
+            }
+            break
+        elif step.type == ReActStepType.FINAL_ANSWER:
+            final_answer = step.answer
+        elif step.type == ReActStepType.ERROR:
+            raise RuntimeError(step.error)
+
+    task.result = {
+        "mode": mode,
+        "skill": skill_name,
+        "answer": final_answer,
+        "paused": paused,
+        "steps_summary": steps,
+        "customer_context": customer_context,
+    }
+
+
 def register_all_handlers(queue: TaskQueue) -> None:
     """注册所有任务处理器。"""
     queue.register_handler(TaskType.EVAL_SINGLE.value, handle_eval_single)
     queue.register_handler(TaskType.EVAL_BATCH.value, handle_eval_batch)
     queue.register_handler(TaskType.EVAL_COMPARE.value, handle_eval_compare)
     queue.register_handler(TaskType.AGENT_CHAT.value, handle_agent_chat)
+    queue.register_handler(TaskType.CUSTOMER_SERVICE_COPILOT.value, handle_customer_service_task)
+    queue.register_handler(TaskType.AFTER_SALES_TICKET_DRAFT.value, handle_customer_service_task)
     logger.info("task_handlers_registered")

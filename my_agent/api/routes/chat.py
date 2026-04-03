@@ -29,7 +29,11 @@ from my_agent.core.engine.react_engine import ReActEngine, ReActRunControl, ReAc
 from my_agent.domain.agent import AgentSkill, get_skill_registry
 from my_agent.domain.guardrails.base import GuardAction
 from my_agent.infrastructure.db.database import get_db
-from my_agent.infrastructure.db.repository import MessageRepository, SessionRepository
+from my_agent.infrastructure.db.repository import (
+    ApprovalRecordRepository,
+    MessageRepository,
+    SessionRepository,
+)
 
 router = APIRouter(tags=["chat"])
 
@@ -232,6 +236,20 @@ async def resume_chat_run(
 ):
     input_chain, output_chain, _ = get_guardrails()
     _ = input_chain  # 保持接口对齐；resume 不重新做输入检查
+    previous_state = await engine.get_run_state(run_id)
+    stage = previous_state.get("current_node", "")
+    checkpoint_id = previous_state.get("checkpoint_id", "")
+    session_id = run_id.split(":", 1)[0] if ":" in run_id else ""
+    if previous_state.get("status") == "paused" and body.action.lower() in {"resume", "approve", "reject", "cancel"}:
+        approval_repo = ApprovalRecordRepository(db)
+        await approval_repo.add(
+            run_id=run_id,
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            stage=stage or "unknown",
+            decision=body.action.lower(),
+            feedback=body.feedback,
+        )
 
     if body.stream:
         return StreamingResponse(
@@ -262,7 +280,6 @@ async def resume_chat_run(
             final_answer = f"[错误] {step.error}"
 
     state = await engine.get_run_state(run_id)
-    session_id = run_id.split(":", 1)[0] if ":" in run_id else ""
     if paused_step is not None:
         return ChatResponse(
             session_id=session_id,

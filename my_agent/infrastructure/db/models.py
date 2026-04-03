@@ -97,3 +97,42 @@ class ToolCallModel(Base):
 
     def __repr__(self) -> str:
         return f"<ToolCall id={self.id} tool={self.tool_name!r}>"
+
+
+class ApprovalRecordModel(Base):
+    """审批记录表（用于高风险工具和最终答复审计）。"""
+
+    __tablename__ = "approval_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(120), index=True)
+    session_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    checkpoint_id: Mapped[str] = mapped_column(String(120), default="")
+    stage: Mapped[str] = mapped_column(String(50), default="tool_gate")  # tool_gate / final_gate
+    decision: Mapped[str] = mapped_column(String(20), default="approved")
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<ApprovalRecord run_id={self.run_id!r} stage={self.stage!r} decision={self.decision!r}>"
+
+
+class CustomerServiceFeedbackModel(Base):
+    """客服 Copilot 反馈表。"""
+
+    __tablename__ = "customer_service_feedback"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    run_id: Mapped[str] = mapped_column(String(120), default="", index=True)
+    customer_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    knowledge_domain: Mapped[str] = mapped_column(String(64), default="faq")
+    adopted: Mapped[bool] = mapped_column(Boolean, default=False)
+    rating: Mapped[int] = mapped_column(Integer, default=0)
+    feedback_type: Mapped[str] = mapped_column(String(50), default="reply_suggestion")
+    feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<CustomerServiceFeedback id={self.id} session={self.session_id!r} type={self.feedback_type!r}>"
