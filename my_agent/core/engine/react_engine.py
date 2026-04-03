@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator
@@ -22,11 +21,7 @@ from my_agent.domain.agent.skill import AgentSkill
 from my_agent.domain.guardrails.chain import GuardChain, build_default_output_chain
 from my_agent.domain.llm.base import BaseLLMClient, LLMResponse
 from my_agent.domain.llm.message import (
-    AssistantMessage,
     Message,
-    SystemMessage,
-    ToolMessage,
-    ToolCallInfo,
     UserMessage,
 )
 from my_agent.domain.prompt.react_prompt import _register_react_prompts  # 确保注册
@@ -39,7 +34,6 @@ from my_agent.utils.token_counter import (
     ContextBudget,
     build_context_budget,
     count_messages_tokens,
-    count_tokens,
 )
 
 logger = get_logger(__name__)
@@ -52,6 +46,7 @@ class ReActStepType(str, Enum):
     ACTION = "action"             # Agent 决定调用工具
     OBSERVATION = "observation"   # 工具返回结果
     FINAL_ANSWER = "final_answer" # 最终答案
+    PAUSED = "paused"             # 在断点处暂停，等待恢复/审批
     ERROR = "error"               # 发生错误
 
 
@@ -69,6 +64,28 @@ class ReActStep:
     iteration: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    checkpoint_id: str = ""
+    pause_reason: str = ""
+    requires_approval: bool = False
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ReActRunControl:
+    """主链路 ReAct 的暂停/审批控制项。"""
+
+    pause_before_tools: bool = False
+    pause_before_answer: bool = False
+    approval_before_tools: bool = False
+    approval_before_answer: bool = False
+
+    @property
+    def tool_gate_enabled(self) -> bool:
+        return self.pause_before_tools or self.approval_before_tools
+
+    @property
+    def final_gate_enabled(self) -> bool:
+        return self.pause_before_answer or self.approval_before_answer
 
 
 @dataclass
@@ -107,6 +124,7 @@ class ReActEngine:
         self._prompt_registry = get_prompt_registry()
         self._budget = budget or build_context_budget()
         self._observation_guard = observation_guard
+        self._graph_runtime: Any | None = None
         if self._observation_guard is None and settings.guardrails_enabled:
             self._observation_guard = build_default_output_chain()
 
@@ -115,235 +133,150 @@ class ReActEngine:
         query: str,
         history: list[Message] | None = None,
         skill: AgentSkill | None = None,
+        thread_id: str | None = None,
+        control: ReActRunControl | None = None,
     ) -> AsyncGenerator[ReActStep, None]:
         """执行 ReAct 循环，逐步 yield ReActStep。"""
-        start_time = time.monotonic()
-        prompt_tokens = 0
-        completion_tokens = 0
-
-        # 构建工具描述
-        available_tools = self._resolve_available_tools(skill)
-        tools_description = self._build_tools_description(available_tools)
-        llm_tools = [tool.to_openai_tool() for tool in available_tools]
-        if skill:
-            logger.info(
-                "react_skill_activated",
-                skill=skill.name,
-                allowed_tools=[tool.name for tool in available_tools],
-            )
-
-        # 构建系统 Prompt
-        system_content = self._prompt_registry.render(
-            "react_system",
-            tools_description=tools_description,
-            max_iterations=self._max_iterations,
-        )
-        if skill and skill.system_instructions:
-            system_content = (
-                f"{system_content}\n\n"
-                f"## 当前激活技能: {skill.name}\n"
-                f"{skill.system_instructions}"
-            )
-
-        budget = self._budget
-
-        # ── 第1层：System Prompt（含工具描述）──────────────────────────────
-        system_tokens = count_tokens(system_content)
-        if system_tokens > budget.system_budget:
-            logger.warning(
-                "system_prompt_over_budget",
-                system_tokens=system_tokens,
-                system_budget=budget.system_budget,
-            )
-        messages: list[Message] = [SystemMessage(system_content)]
-
-        # ── 第2层：对话历史（按 history_budget 裁剪）──────────────────────
-        if history:
-            from my_agent.utils.token_counter import trim_history_to_budget
-            trimmed = trim_history_to_budget(history, budget.history_budget)
-            dropped = len(history) - len(trimmed)
-            if dropped > 0:
-                logger.info(
-                    "history_trimmed",
-                    original=len(history),
-                    kept=len(trimmed),
-                    dropped=dropped,
-                    history_budget=budget.history_budget,
-                )
-            messages.extend(trimmed)
-
-        # ── 第3层：Few-shot + 用户问题 ────────────────────────────────────
-        few_shot = self._prompt_registry.render("react_few_shot")
-        if skill and skill.few_shot:
-            few_shot = f"{few_shot}\n\n{skill.few_shot}"
-        user_turn = f"{few_shot}\n\n用户问题: {query}"
-        user_tokens = count_tokens(user_turn)
-        if user_tokens > budget.few_shot_budget:
-            logger.warning(
-                "user_turn_over_budget",
-                user_tokens=user_tokens,
-                few_shot_budget=budget.few_shot_budget,
-            )
-        messages.append(UserMessage(user_turn))
-
-        # ── 预算汇总日志 ──────────────────────────────────────────────────
-        total_input_tokens = count_messages_tokens(messages)
-        logger.info(
-            "context_budget_check",
-            **budget.summary(),
-            total_input_tokens=total_input_tokens,
-            remaining=budget.remaining_after(total_input_tokens),
-        )
-
-        # 最终兜底：如果固定层本身就超出总预算（配置错误），直接报错
-        if total_input_tokens > budget.total_input_budget:
-            yield ReActStep(
-                type=ReActStepType.ERROR,
-                error=(
-                    f"上下文超出总输入预算！"
-                    f"当前 {total_input_tokens} tokens，"
-                    f"总输入预算 {budget.total_input_budget} tokens。"
-                    f"请检查 ctx_system_budget / ctx_few_shot_budget 配置。"
-                ),
-                iteration=0,
-            )
-            return
-
-        for iteration in range(1, self._max_iterations + 1):
-            logger.info("react_iteration", iteration=iteration, query=query[:50])
-
-            # ---- LLM 推理 ----
-            yield ReActStep(type=ReActStepType.THINKING, iteration=iteration)
-
-            try:
-                response = await self._llm.chat(
-                    messages,
-                    tools=llm_tools or None,
-                    temperature=0.2,  # 低温度提升 JSON 输出稳定性
-                )
-            except Exception as e:
-                yield ReActStep(type=ReActStepType.ERROR, error=str(e), iteration=iteration)
-                return
-
-            step_prompt_tokens = response.usage.prompt_tokens
-            step_completion_tokens = response.usage.completion_tokens
-            prompt_tokens += step_prompt_tokens
-            completion_tokens += step_completion_tokens
-
-            raw_output = response.content or ""
-            logger.debug("react_llm_output", iteration=iteration, raw=raw_output[:300])
-
-            # ---- 解析 LLM 输出 / Tool Call ----
-            decision = self._extract_response_decision(response, iteration)
-            if decision is None:
+        runtime = self._get_graph_runtime()
+        async for event in runtime.run(
+            query,
+            history=history,
+            skill=skill,
+            thread_id=thread_id,
+            control=control,
+        ):
+            event_type = event["type"]
+            if event_type == ReActStepType.THINKING.value:
                 yield ReActStep(
-                    type=ReActStepType.ERROR,
-                    error=f"LLM 输出解析失败: {raw_output[:200]}",
-                    iteration=iteration,
+                    type=ReActStepType.THINKING,
+                    iteration=int(event.get("iteration", 0) or 0),
                 )
-                return
-
-            thought = decision["thought"]
-            action = decision["action"]
-            action_input = decision["action_input"]
-            raw_action_input = decision["raw_action_input"]
-            tool_call_id = decision["tool_call_id"] or f"call_{iteration}"
-
-            # ---- 最终答案 ----
-            if action == "final_answer":
-                answer = decision["answer"]
+            elif event_type == ReActStepType.ACTION.value:
+                yield ReActStep(
+                    type=ReActStepType.ACTION,
+                    thought=str(event.get("thought", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    action_input=event.get("action_input", {}) or {},
+                    iteration=int(event.get("iteration", 0) or 0),
+                    prompt_tokens=int(event.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(event.get("completion_tokens", 0) or 0),
+                )
+            elif event_type == ReActStepType.OBSERVATION.value:
+                yield ReActStep(
+                    type=ReActStepType.OBSERVATION,
+                    observation=str(event.get("observation", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
+                )
+            elif event_type == ReActStepType.FINAL_ANSWER.value:
                 yield ReActStep(
                     type=ReActStepType.FINAL_ANSWER,
-                    thought=thought,
-                    answer=answer,
-                    iteration=iteration,
-                    prompt_tokens=step_prompt_tokens,
-                    completion_tokens=step_completion_tokens,
+                    thought=str(event.get("thought", "") or ""),
+                    answer=str(event.get("answer", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
+                    prompt_tokens=int(event.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(event.get("completion_tokens", 0) or 0),
+                )
+                return
+            elif event_type == ReActStepType.PAUSED.value:
+                yield ReActStep(
+                    type=ReActStepType.PAUSED,
+                    thought=str(event.get("thought", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    action_input=event.get("action_input", {}) or {},
+                    answer=str(event.get("answer_preview", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
+                    checkpoint_id=str(event.get("checkpoint_id", "") or ""),
+                    pause_reason=str(event.get("pause_reason", "") or ""),
+                    requires_approval=bool(event.get("requires_approval", False)),
+                    data=event.get("data", {}) or {},
+                )
+                return
+            elif event_type == ReActStepType.ERROR.value:
+                yield ReActStep(
+                    type=ReActStepType.ERROR,
+                    error=str(event.get("error", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
                 )
                 return
 
-            # ---- 工具调用 ----
-            yield ReActStep(
-                type=ReActStepType.ACTION,
-                thought=thought,
-                action=action,
-                action_input=action_input if isinstance(action_input, dict) else {},
-                iteration=iteration,
-                prompt_tokens=step_prompt_tokens,
-                completion_tokens=step_completion_tokens,
-            )
-
-            # 将 Assistant 消息加入历史（含 tool_calls）
-            messages.append(AssistantMessage(
-                content=response.content,
-                tool_calls=[ToolCallInfo(
-                    id=tool_call_id,
-                    name=action,
-                    arguments=self._serialize_tool_arguments(raw_action_input),
-                )],
-            ))
-
-            # ---- 执行工具 ----
-            if skill and skill.has_tool_restrictions and action not in {tool.name for tool in available_tools}:
-                observation = (
-                    f"[ERROR] 工具 '{action}' 不在当前技能 '{skill.name}' 的允许列表中。"
-                    f"允许工具: {[tool.name for tool in available_tools]}"
+    async def resume_run(
+        self,
+        run_id: str,
+        *,
+        action: str = "resume",
+        feedback: str = "",
+    ) -> AsyncGenerator[ReActStep, None]:
+        runtime = self._get_graph_runtime()
+        async for event in runtime.resume_run(run_id, action=action, feedback=feedback):
+            event_type = event["type"]
+            if event_type == ReActStepType.THINKING.value:
+                yield ReActStep(type=ReActStepType.THINKING, iteration=int(event.get("iteration", 0) or 0))
+            elif event_type == ReActStepType.ACTION.value:
+                yield ReActStep(
+                    type=ReActStepType.ACTION,
+                    thought=str(event.get("thought", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    action_input=event.get("action_input", {}) or {},
+                    iteration=int(event.get("iteration", 0) or 0),
+                    prompt_tokens=int(event.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(event.get("completion_tokens", 0) or 0),
                 )
-            else:
-                tool_result = await self._executor.execute(
-                    action,
-                    raw_action_input,
+            elif event_type == ReActStepType.OBSERVATION.value:
+                yield ReActStep(
+                    type=ReActStepType.OBSERVATION,
+                    observation=str(event.get("observation", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
                 )
-                observation = tool_result.to_observation()
-            observation = await self._sanitize_observation(observation, action)
-
-            yield ReActStep(
-                type=ReActStepType.OBSERVATION,
-                observation=observation,
-                action=action,
-                iteration=iteration,
-            )
-
-            # 将 Observation 注入消息历史
-            messages.append(ToolMessage(content=observation, tool_call_id=tool_call_id))
-
-            # ── 迭代内预算检查：每次注入 Observation 后检查剩余空间 ──────
-            current_tokens = count_messages_tokens(messages)
-            remaining = budget.remaining_after(current_tokens)
-            logger.debug(
-                "iteration_budget_check",
-                iteration=iteration,
-                current_tokens=current_tokens,
-                remaining=remaining,
-                iteration_budget=budget.iteration_budget,
-            )
-            # 剩余空间不足以支撑下一次迭代，提前结束并要求 LLM 给出当前结论
-            if remaining < budget.iteration_budget:
-                logger.warning(
-                    "budget_exhausted_early_stop",
-                    iteration=iteration,
-                    current_tokens=current_tokens,
-                    remaining=remaining,
+            elif event_type == ReActStepType.FINAL_ANSWER.value:
+                yield ReActStep(
+                    type=ReActStepType.FINAL_ANSWER,
+                    thought=str(event.get("thought", "") or ""),
+                    answer=str(event.get("answer", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
+                    prompt_tokens=int(event.get("prompt_tokens", 0) or 0),
+                    completion_tokens=int(event.get("completion_tokens", 0) or 0),
                 )
-                yield await self._summarize_with_current_context(
-                    messages,
-                    iteration=iteration,
-                    reason=(
-                        f"上下文预算不足，已在第 {iteration} 次迭代后停止继续调用工具。"
-                        f"当前已用 {current_tokens} tokens，"
-                        f"剩余 {remaining} tokens 不足以支撑下一轮完整推理。"
-                    ),
+                return
+            elif event_type == ReActStepType.PAUSED.value:
+                yield ReActStep(
+                    type=ReActStepType.PAUSED,
+                    thought=str(event.get("thought", "") or ""),
+                    action=str(event.get("action", "") or ""),
+                    action_input=event.get("action_input", {}) or {},
+                    answer=str(event.get("answer_preview", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
+                    checkpoint_id=str(event.get("checkpoint_id", "") or ""),
+                    pause_reason=str(event.get("pause_reason", "") or ""),
+                    requires_approval=bool(event.get("requires_approval", False)),
+                    data=event.get("data", {}) or {},
+                )
+                return
+            elif event_type == ReActStepType.ERROR.value:
+                yield ReActStep(
+                    type=ReActStepType.ERROR,
+                    error=str(event.get("error", "") or ""),
+                    iteration=int(event.get("iteration", 0) or 0),
                 )
                 return
 
-        # 超出最大迭代次数后，做最后总结
-        yield await self._summarize_with_current_context(
-            messages,
-            iteration=self._max_iterations,
-            reason=f"已达到最大迭代次数 {self._max_iterations}，请基于已有 observation 收敛并给出最终答案。",
-        )
+    async def get_run_state(self, run_id: str) -> dict[str, Any]:
+        runtime = self._get_graph_runtime()
+        return await runtime.get_run_state(run_id)
+
+    async def get_run_history(self, run_id: str) -> list[dict[str, Any]]:
+        runtime = self._get_graph_runtime()
+        return await runtime.get_run_history(run_id)
 
     # ==================== 内部方法 ====================
+
+    def _get_graph_runtime(self) -> Any:
+        if self._graph_runtime is None:
+            from my_agent.core.engine.react_graph_runtime import ReActGraphRuntime
+
+            self._graph_runtime = ReActGraphRuntime(self)
+        return self._graph_runtime
 
     def _resolve_available_tools(self, skill: AgentSkill | None) -> list[BaseTool]:
         """根据 Skill 过滤当前轮允许使用的工具。"""
