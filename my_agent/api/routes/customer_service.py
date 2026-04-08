@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from my_agent.api.routes.chat import chat_completions
-from my_agent.api.schemas.chat import ChatRequest
+from my_agent.api.schemas.chat import ChatRequest, ChatResponse
 from my_agent.api.schemas.customer_service import (
     CustomerServiceCopilotRequest,
     CustomerServiceFeedbackRequest,
@@ -20,10 +20,13 @@ from my_agent.core.dependencies import get_react_engine
 from my_agent.core.engine.react_engine import ReActEngine
 from my_agent.domain.customer_service import (
     build_customer_service_message,
+    build_customer_service_route_input,
     default_approval_before_tools,
+    decide_customer_service_execution,
     get_customer_service_baseline,
     resolve_skill_name,
 )
+from my_agent.domain.customer_service.multi_agent_adapter import run_customer_service_multi_agent
 from my_agent.infrastructure.db.database import get_db
 from my_agent.infrastructure.db.models import ApprovalRecordModel, MessageModel, ToolCallModel
 from my_agent.infrastructure.db.repository import CustomerServiceFeedbackRepository
@@ -47,6 +50,23 @@ async def customer_service_copilot(
     context = body.customer_context.model_dump()
     if body.session_id and not context.get("session_id"):
         context["session_id"] = body.session_id
+    route_input = build_customer_service_route_input(
+        message=body.message,
+        mode=body.mode,
+        allow_write_actions=body.allow_write_actions,
+        customer_context=context,
+        execution_strategy=body.execution_strategy,
+        multi_agent_scenario=body.multi_agent_scenario,
+    )
+    route_decision = decide_customer_service_execution(route_input)
+    if route_decision.engine_type == "multi_agent":
+        return await run_customer_service_multi_agent(
+            body=body,
+            route_input=route_input,
+            decision=route_decision,
+            db=db,
+        )
+
     enriched_message = build_customer_service_message(
         body.message,
         context=context,
@@ -61,7 +81,10 @@ async def customer_service_copilot(
         approval_before_tools=default_approval_before_tools(body.mode, body.allow_write_actions),
         approval_before_answer=body.approval_before_answer,
     )
-    return await chat_completions(chat_request, engine=engine, db=db)
+    response = await chat_completions(chat_request, engine=engine, db=db)
+    if isinstance(response, ChatResponse):
+        response.data = {**route_decision.to_metadata(), **response.data}
+    return response
 
 
 @router.post("/tasks")
@@ -72,7 +95,11 @@ async def submit_customer_service_task(body: CustomerServiceTaskRequest) -> JSON
         payload={
             "message": body.message,
             "mode": body.mode,
+            "skill": body.skill,
             "allow_write_actions": body.allow_write_actions,
+            "approval_before_answer": body.approval_before_answer,
+            "execution_strategy": body.execution_strategy,
+            "multi_agent_scenario": body.multi_agent_scenario,
             "customer_context": body.customer_context.model_dump(),
         },
     )

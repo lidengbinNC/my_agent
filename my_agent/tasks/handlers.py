@@ -13,9 +13,13 @@ from my_agent.evaluation.models import AgentTypeLabel, TaskDifficulty
 from my_agent.evaluation.runner import EvalRunner
 from my_agent.domain.customer_service import (
     build_customer_service_message,
+    build_customer_service_route_input,
+    default_approval_before_tools,
+    decide_customer_service_execution,
     resolve_skill_name,
 )
 from my_agent.domain.agent import get_skill_registry
+from my_agent.domain.customer_service.multi_agent_adapter import run_customer_service_multi_agent_task
 from my_agent.tasks.models import TaskRecord, TaskType
 from my_agent.tasks.queue import TaskQueue
 from my_agent.utils.logger import get_logger
@@ -182,22 +186,47 @@ async def handle_customer_service_task(task: TaskRecord, queue: TaskQueue) -> No
     payload = task.payload
     message = payload.get("message", "")
     mode = payload.get("mode", "copilot")
+    explicit_skill = payload.get("skill")
     allow_write_actions = bool(payload.get("allow_write_actions", False))
+    approval_before_answer = bool(payload.get("approval_before_answer", False))
+    execution_strategy = str(payload.get("execution_strategy", "auto") or "auto")
+    multi_agent_scenario = str(payload.get("multi_agent_scenario", "") or "")
     customer_context = payload.get("customer_context", {}) or {}
     if not message:
         raise ValueError("message 不能为空")
 
     await queue.update_progress(task, 5, "准备客服上下文...")
+    route_input = build_customer_service_route_input(
+        message=message,
+        mode=mode,
+        allow_write_actions=allow_write_actions,
+        customer_context=customer_context,
+        execution_strategy=execution_strategy,
+        multi_agent_scenario=multi_agent_scenario,
+    )
+    route_decision = decide_customer_service_execution(route_input)
+    if route_decision.engine_type == "multi_agent":
+        await queue.update_progress(task, 15, "开始客服 Multi-Agent 协作...")
+        task.result = await run_customer_service_multi_agent_task(
+            task_id=task.task_id,
+            route_input=route_input,
+            decision=route_decision,
+            approval_before_answer=approval_before_answer,
+            progress_cb=lambda pct, msg: queue.update_progress(task, pct, msg),
+        )
+        return
+
     prompt = build_customer_service_message(
         message,
         context=customer_context,
         mode=mode,
         allow_write_actions=allow_write_actions,
     )
-    skill_name = resolve_skill_name(mode)
+    skill_name = resolve_skill_name(mode, explicit_skill)
     skill = get_skill_registry().get(skill_name) if skill_name else None
     control = ReActRunControl(
-        approval_before_tools=allow_write_actions or mode in {"ticket_draft", "complaint_review"},
+        approval_before_tools=default_approval_before_tools(mode, allow_write_actions),
+        approval_before_answer=approval_before_answer,
     )
 
     await queue.update_progress(task, 15, "开始客服 Copilot 推理...")
@@ -226,8 +255,11 @@ async def handle_customer_service_task(task: TaskRecord, queue: TaskQueue) -> No
             raise RuntimeError(step.error)
 
     task.result = {
+        "engine_type": "single_agent",
         "mode": mode,
         "skill": skill_name,
+        "route_reasons": list(route_decision.reasons),
+        "complexity_score": route_decision.complexity_score,
         "answer": final_answer,
         "paused": paused,
         "steps_summary": steps,

@@ -11,6 +11,8 @@ from langgraph_impl.multi_agent_runtime import (
     build_resume_updates,
     derive_pause_reason,
     deserialize_agent_spec,
+    route_after_apply_handoffs,
+    route_after_planner,
     serialize_agent_spec,
 )
 from my_agent.domain.multi_agent.agent_spec import AgentSpec
@@ -91,3 +93,20 @@ def test_build_multi_agent_graph_compiles_without_state_key_conflicts():
     app = build_multi_agent_graph()
 
     assert app is not None
+
+
+def test_supervisor_mode_routes_through_supervisor_node():
+    planner_state = {
+        "error": "",
+        "mode": "supervisor",
+        "pending_agents": ["fact_agent", "policy_agent"],
+    }
+    apply_state = {
+        "error": "",
+        "mode": "supervisor",
+        "pending_agents": ["policy_agent"],
+        "phase": "workers",
+    }
+
+    assert route_after_planner(planner_state) == "supervisor"
+    assert route_after_apply_handoffs(apply_state) == "supervisor"

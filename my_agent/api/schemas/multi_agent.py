@@ -34,7 +34,7 @@ class MultiAgentRunRequest(BaseModel):
     )
     mode: str = Field(
         default="sequential",
-        description="协作模式: sequential / parallel / hierarchical",
+        description="协作模式: sequential / parallel / hierarchical / supervisor",
     )
     stream: bool = True
     pause_before_handoff: bool = Field(default=False, description="每个 handoff 合入共享上下文前暂停")

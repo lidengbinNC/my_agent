@@ -32,6 +32,11 @@ class CustomerServiceCopilotRequest(BaseModel):
     skill: str | None = Field(default=None, description="显式指定 Skill")
     allow_write_actions: bool = Field(default=False, description="是否允许进入写操作审批流")
     approval_before_answer: bool = Field(default=False, description="最终答复前是否审批")
+    execution_strategy: Literal["auto", "single_agent", "multi_agent"] = Field(
+        default="auto",
+        description="执行策略：自动分流 / 强制单 Agent / 强制多 Agent",
+    )
+    multi_agent_scenario: str = Field(default="", description="强制多 Agent 时指定场景")
     customer_context: CustomerContext = Field(default_factory=CustomerContext)
 
 
@@ -54,5 +59,12 @@ class CustomerServiceTaskRequest(BaseModel):
     )
     message: str = Field(..., min_length=1, description="用户消息")
     mode: str = Field(default="copilot", description="执行模式")
+    skill: str | None = Field(default=None, description="显式指定 Skill")
     allow_write_actions: bool = Field(default=False, description="是否允许进入写操作审批流")
+    approval_before_answer: bool = Field(default=False, description="最终答复前是否审批")
+    execution_strategy: Literal["auto", "single_agent", "multi_agent"] = Field(
+        default="auto",
+        description="执行策略：自动分流 / 强制单 Agent / 强制多 Agent",
+    )
+    multi_agent_scenario: str = Field(default="", description="强制多 Agent 时指定场景")
     customer_context: CustomerContext = Field(default_factory=CustomerContext)

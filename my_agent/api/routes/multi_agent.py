@@ -32,6 +32,8 @@ from my_agent.api.schemas.multi_agent import (
 from my_agent.config.settings import settings
 from my_agent.core.dependencies import create_memory, get_guardrails
 from my_agent.core.multi_agent.scenarios import (
+    build_customer_complaint_review_agents,
+    build_customer_complex_case_agents,
     build_data_analysis_agents,
     build_research_report_agents,
 )
@@ -59,6 +61,18 @@ _PRESET_SCENARIOS = {
         "description": "Manager 协调 DataAgent + AnalystAgent + ReporterAgent，层级协作生成数据报告",
         "mode": "hierarchical",
         "agents": ["manager", "data_agent", "analyst_agent", "reporter_agent"],
+    },
+    "customer_complaint_review": {
+        "name": "投诉复核",
+        "description": "Supervisor 反复调度事实调查、政策核验和处置建议，输出投诉复核结论",
+        "mode": "supervisor",
+        "agents": ["manager", "fact_agent", "policy_agent", "resolution_agent"],
+    },
+    "customer_complex_case": {
+        "name": "复杂售后案件",
+        "description": "调查员、政策核验员、工单草稿专家顺序协作处理复杂售后案件",
+        "mode": "sequential",
+        "agents": ["investigator", "policy_checker", "ticket_drafter"],
     },
 }
 _AGENT_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899"]
@@ -750,6 +764,10 @@ def _build_agent_specs(req: MultiAgentRunRequest) -> list[AgentSpec]:
         return build_research_report_agents()
     if req.scenario == "data_analysis":
         return build_data_analysis_agents()
+    if req.scenario == "customer_complaint_review":
+        return build_customer_complaint_review_agents()
+    if req.scenario == "customer_complex_case":
+        return build_customer_complex_case_agents()
     specs: list[AgentSpec] = []
     for item in req.agents:
         try:

@@ -38,6 +38,12 @@ class AssignmentPlan(BaseModel):
     assignments: list[AssignmentItem] = Field(default_factory=list)
 
 
+class SupervisorDecision(BaseModel):
+    next_agent: str = Field(default="")
+    task: str = Field(default="")
+    reason: str = Field(default="")
+
+
 class ReviewFeedbackItem(BaseModel):
     worker: str
     issue: str = ""
@@ -66,6 +72,7 @@ class MultiAgentGraphState(TypedDict):
     completed_agents: list[str]
     current_agent: str
     current_task: str
+    supervisor_reason: str
     phase: str
     review_round: int
     shared_facts: list[str]
@@ -139,6 +146,44 @@ _MANAGER_REVIEW_PROMPT = """你是多 Agent 任务的最终审核者。
 3. 只输出 JSON
 """
 
+_SUPERVISOR_DECISION_PROMPT = """你是 LangGraph Supervisor 架构中的主管 Agent。
+
+用户目标:
+{goal}
+
+共享背景:
+{context_summary}
+
+已完成的 Agent:
+{completed_agents}
+
+待执行的 Agent:
+{pending_agents}
+
+当前共享事实:
+{shared_facts}
+
+历史交接:
+{handoffs_text}
+
+可用 Worker 说明:
+{workers_desc}
+
+请决定下一位要执行的 Agent，或输出 FINISH 表示可以直接进入最终汇总。
+输出严格 JSON:
+{{
+  "next_agent": "agent_name 或 FINISH",
+  "task": "给该 Agent 的具体任务；若 next_agent=FINISH 可留空",
+  "reason": "为什么选择该 Agent 或为什么可以结束"
+}}
+
+要求：
+1. next_agent 必须是待执行 Agent 中的一个，或 FINISH
+2. task 必须明确、可执行、聚焦该 Agent 的职责
+3. 当证据已充分时才输出 FINISH
+4. 只输出 JSON
+"""
+
 _HANDOFF_PROMPT = """你是多 Agent 系统中的交接整理器。
 
 请根据以下输入，生成供其他 Agent 复用的结构化 handoff。
@@ -190,6 +235,7 @@ def deserialize_agent_spec(payload: dict[str, Any]) -> AgentSpec:
 def build_multi_agent_graph(*, checkpointer: Any | None = None) -> Any:
     graph = StateGraph(MultiAgentGraphState)
     graph.add_node("planner", planner_node)
+    graph.add_node("supervisor", supervisor_node)
     graph.add_node("run_worker", run_worker_node)
     graph.add_node("run_parallel_workers", run_parallel_workers_node)
     graph.add_node("handoff_gate", handoff_gate_node)
@@ -204,8 +250,18 @@ def build_multi_agent_graph(*, checkpointer: Any | None = None) -> Any:
         "planner",
         route_after_planner,
         {
+            "supervisor": "supervisor",
             "run_worker": "run_worker",
             "run_parallel_workers": "run_parallel_workers",
+            "finalize_prepare": "finalize_prepare",
+            END: END,
+        },
+    )
+    graph.add_conditional_edges(
+        "supervisor",
+        route_after_supervisor,
+        {
+            "run_worker": "run_worker",
             "finalize_prepare": "finalize_prepare",
             END: END,
         },
@@ -426,6 +482,7 @@ def build_initial_state(
         "completed_agents": [],
         "current_agent": "",
         "current_task": "",
+        "supervisor_reason": "",
         "phase": "planning",
         "review_round": 0,
         "shared_facts": [],
@@ -468,6 +525,14 @@ async def planner_node(state: MultiAgentGraphState) -> dict[str, Any]:
             "phase": "workers",
             "manager_name": _resolve_manager_name(specs),
         }
+    if mode == "supervisor":
+        order = [spec.name for spec in non_manager_specs]
+        return {
+            "agent_order": order,
+            "pending_agents": order,
+            "phase": "supervising",
+            "manager_name": _resolve_manager_name(specs),
+        }
     if mode == "parallel":
         assignments = {spec.name: _build_parallel_task(state, spec) for spec in specs}
         return {
@@ -483,15 +548,62 @@ async def planner_node(state: MultiAgentGraphState) -> dict[str, Any]:
     }
 
 
+async def supervisor_node(state: MultiAgentGraphState) -> dict[str, Any]:
+    specs = _specs_from_state(state)
+    manager_name = _resolve_manager_name(specs)
+    pending_agents = list(state.get("pending_agents", []) or [])
+    if not pending_agents:
+        return {
+            "current_agent": "",
+            "current_task": "",
+            "supervisor_reason": "所有待执行 Agent 已完成，进入最终汇总。",
+            "phase": "supervisor_done",
+        }
+
+    decision = await _supervisor_decide(state, manager_name)
+    next_agent = decision.next_agent.strip()
+    if not next_agent or next_agent.upper() == "FINISH":
+        return {
+            "current_agent": "",
+            "current_task": "",
+            "pending_agents": [],
+            "supervisor_reason": decision.reason or "Supervisor 判断现有结果已足够交付。",
+            "phase": "supervisor_done",
+        }
+
+    if next_agent not in pending_agents:
+        next_agent = pending_agents[0]
+
+    spec = _spec_by_name(state, next_agent)
+    if spec is None:
+        return {"error": f"Supervisor 选择的 Agent '{next_agent}' 不存在"}
+    task = decision.task.strip() or _build_supervisor_task(state, spec)
+    assignments = dict(state.get("assignments", {}) or {})
+    assignments[next_agent] = task
+    return {
+        "current_agent": next_agent,
+        "current_task": task,
+        "assignments": assignments,
+        "supervisor_reason": decision.reason or f"Supervisor 选择 {next_agent} 执行下一步。",
+        "phase": "workers",
+    }
+
+
 async def run_worker_node(state: MultiAgentGraphState) -> dict[str, Any]:
     pending_agents = list(state.get("pending_agents", []) or [])
     if not pending_agents:
         return {}
-    current_agent = pending_agents[0]
+    current_agent = str(state.get("current_agent", "") or "")
+    if current_agent not in pending_agents:
+        current_agent = pending_agents[0]
     spec = _spec_by_name(state, current_agent)
     if spec is None:
         return {"error": f"Agent '{current_agent}' 不存在"}
-    task = state.get("assignments", {}).get(current_agent) or _build_sequential_task(state, spec)
+    task = (
+        str(state.get("current_task", "") or "")
+        or state.get("assignments", {}).get(current_agent)
+        or _build_sequential_task(state, spec)
+    )
     result = await _execute_agent(spec, task, state)
     pending_workspace = dict(state.get("agent_workspaces", {}) or {})
     pending_workspace[current_agent] = result["workspace"]
@@ -617,6 +729,8 @@ async def apply_handoffs_node(state: MultiAgentGraphState) -> dict[str, Any]:
         "pending_agents": pending_agents,
         "pending_handoff": {},
         "pending_batch_handoffs": [],
+        "current_agent": "",
+        "current_task": "",
         "handoff_gate_decision": "auto",
         "handoff_gate_feedback": "",
     }
@@ -700,9 +814,19 @@ def route_after_planner(state: MultiAgentGraphState) -> str:
     mode = str(state.get("mode", "sequential") or "sequential").lower()
     if not list(state.get("pending_agents", []) or []):
         return "finalize_prepare"
+    if mode == "supervisor":
+        return "supervisor"
     if mode in {"parallel", "hierarchical"}:
         return "run_parallel_workers"
     return "run_worker"
+
+
+def route_after_supervisor(state: MultiAgentGraphState) -> str:
+    if state.get("error"):
+        return END
+    if state.get("current_agent"):
+        return "run_worker"
+    return "finalize_prepare"
 
 
 def route_after_worker_run(state: MultiAgentGraphState) -> str:
@@ -742,6 +866,10 @@ def route_after_apply_handoffs(state: MultiAgentGraphState) -> str:
             return "run_parallel_workers"
         if phase in {"workers_done", "revision_done", "workers", "revision"}:
             return "manager_review"
+        return "finalize_prepare"
+    if mode == "supervisor":
+        if pending_agents:
+            return "supervisor"
         return "finalize_prepare"
     return "finalize_prepare"
 
@@ -860,13 +988,36 @@ def _translate_event(node_name: str, node_output: dict[str, Any]) -> list[dict[s
         events.append(
             {
                 "type": "thinking",
-                "message": "多 Agent 计划已生成，开始分配任务。",
+                "message": "多 Agent 计划已生成，开始进入协作流程。",
                 "data": {
                     "pending_agents": node_output.get("pending_agents", []),
                     "mode": node_output.get("mode", ""),
                 },
             }
         )
+    elif node_name == "supervisor":
+        current_agent = str(node_output.get("current_agent", "") or "")
+        reason = str(node_output.get("supervisor_reason", "") or "")
+        if current_agent:
+            events.append(
+                {
+                    "type": "thinking",
+                    "message": f"Supervisor 选择 {current_agent} 执行下一步。",
+                    "data": {
+                        "agent_name": current_agent,
+                        "task": str(node_output.get("current_task", "") or ""),
+                        "reason": reason,
+                    },
+                }
+            )
+        elif reason:
+            events.append(
+                {
+                    "type": "thinking",
+                    "message": reason,
+                    "data": {"reason": reason},
+                }
+            )
     elif node_name == "run_worker" and node_output.get("pending_handoff"):
         handoff = AgentHandoff.model_validate(node_output["pending_handoff"])
         events.append(
@@ -1021,6 +1172,18 @@ def _build_context_digest(state: MultiAgentGraphState) -> str:
     return "\n\n".join(parts)
 
 
+def _build_supervisor_task(state: MultiAgentGraphState, spec: AgentSpec) -> str:
+    shared_facts = list(state.get("shared_facts", []) or [])
+    fact_text = "\n".join(f"- {fact}" for fact in shared_facts[:8]) or "- 暂无共享事实"
+    return (
+        f"用户目标: {state['goal']}\n\n"
+        f"共享背景:\n{state.get('global_context_summary', '')}\n\n"
+        f"当前共享事实:\n{fact_text}\n\n"
+        f"你的角色: {spec.role_description()}\n"
+        "请聚焦你负责的部分，输出供 Supervisor 复核的结构化结果。"
+    )
+
+
 def _build_agent_history(state: MultiAgentGraphState, spec: AgentSpec, task: str) -> list[Message]:
     history: list[Message] = []
     if state.get("global_context_summary"):
@@ -1043,6 +1206,63 @@ def _build_agent_history(state: MultiAgentGraphState, spec: AgentSpec, task: str
             history.append(UserMessage(f"[你上一次的结果]\n{snapshot.final_output[:1200]}"))
     history.append(UserMessage(f"[当前子任务]\n{task}"))
     return history
+
+
+async def _supervisor_decide(state: MultiAgentGraphState, manager_name: str) -> SupervisorDecision:
+    specs = _specs_from_state(state)
+    available = [spec for spec in specs if spec.name in set(state.get("pending_agents", []) or [])]
+    if not available:
+        return SupervisorDecision(next_agent="FINISH", task="", reason="没有待执行的 Agent。")
+
+    workers_desc = "\n".join(f"- {spec.name}: {spec.role_description()}" for spec in available)
+    shared_facts = "\n".join(f"- {fact}" for fact in (state.get("shared_facts", []) or [])[:10]) or "- 暂无"
+    handoffs_text = "\n\n".join(
+        f"【{AgentHandoff.model_validate(payload).agent_name}】 {AgentHandoff.model_validate(payload).summary}"
+        for payload in (state.get("handoffs", []) or [])[-4:]
+    ) or "（暂无）"
+    llm = get_llm_client()
+    try:
+        decision = await get_structured_output(
+            llm,
+            [
+                SystemMessage(
+                    f"你是 {manager_name or 'supervisor'}，负责按照 LangGraph Supervisor 模式协调 Worker。"
+                ),
+                UserMessage(
+                    _SUPERVISOR_DECISION_PROMPT.format(
+                        goal=state["goal"],
+                        context_summary=state.get("global_context_summary", ""),
+                        completed_agents=", ".join(state.get("completed_agents", []) or []) or "无",
+                        pending_agents=", ".join(state.get("pending_agents", []) or []) or "无",
+                        shared_facts=shared_facts,
+                        handoffs_text=handoffs_text,
+                        workers_desc=workers_desc,
+                    )
+                ),
+            ],
+            SupervisorDecision,
+            max_retries=2,
+            initial_temperature=0.2,
+        )
+        valid_names = {spec.name for spec in available}
+        if decision.next_agent.strip().upper() == "FINISH":
+            return decision
+        if decision.next_agent not in valid_names:
+            fallback_spec = available[0]
+            return SupervisorDecision(
+                next_agent=fallback_spec.name,
+                task=decision.task or _build_supervisor_task(state, fallback_spec),
+                reason=f"Supervisor 输出无效，回退到 {fallback_spec.name}。",
+            )
+        return decision
+    except (StructuredOutputError, Exception) as exc:
+        logger.warning("multi_agent_supervisor_decide_fallback", error=str(exc))
+        fallback_spec = available[0]
+        return SupervisorDecision(
+            next_agent=fallback_spec.name,
+            task=_build_supervisor_task(state, fallback_spec),
+            reason=f"Supervisor 决策失败，回退到 {fallback_spec.name}。",
+        )
 
 
 async def _execute_agent(spec: AgentSpec, task: str, state: MultiAgentGraphState) -> dict[str, Any]:
