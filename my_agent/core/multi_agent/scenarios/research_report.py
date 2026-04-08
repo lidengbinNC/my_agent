@@ -20,20 +20,9 @@ from my_agent.domain.multi_agent.message import AgentRole
 from my_agent.domain.tool.registry import ToolRegistry
 
 
-def create_research_report_pipeline(
-    llm: BaseLLMClient,
-    tool_registry: ToolRegistry,
-) -> SequentialCoordinator:
-    """创建研究报告生成 Pipeline（Sequential）。
-
-    Args:
-        llm: LLM 客户端
-        tool_registry: 工具注册表（Researcher 会使用 web_search）
-
-    Returns:
-        配置好的 SequentialCoordinator
-    """
-    agents = [
+def build_research_report_agents() -> list[AgentSpec]:
+    """构建研究报告场景的 Agent 规格列表。"""
+    return [
         AgentSpec(
             name="researcher",
             role=AgentRole.RESEARCHER,
@@ -78,5 +67,21 @@ def create_research_report_pipeline(
             max_iterations=4,
         ),
     ]
+
+
+def create_research_report_pipeline(
+    llm: BaseLLMClient,
+    tool_registry: ToolRegistry,
+) -> SequentialCoordinator:
+    """创建研究报告生成 Pipeline（Sequential）。
+
+    Args:
+        llm: LLM 客户端
+        tool_registry: 工具注册表（Researcher 会使用 web_search）
+
+    Returns:
+        配置好的 SequentialCoordinator
+    """
+    agents = build_research_report_agents()
 
     return SequentialCoordinator(llm=llm, tool_registry=tool_registry, agents=agents)

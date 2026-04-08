@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 
@@ -21,6 +22,8 @@ from my_agent.infrastructure.db.models import (
     ApprovalRecordModel,
     CustomerServiceFeedbackModel,
     MessageModel,
+    MultiAgentEventModel,
+    MultiAgentRunModel,
     SessionModel,
     ToolCallModel,
 )
@@ -227,5 +230,106 @@ class CustomerServiceFeedbackRepository:
             select(CustomerServiceFeedbackModel)
             .order_by(CustomerServiceFeedbackModel.created_at.desc())
             .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
+class MultiAgentRunRepository:
+    """多 Agent 运行主表数据访问对象。"""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def create_or_update(
+        self,
+        *,
+        run_id: str,
+        thread_id: str,
+        session_id: str,
+        scenario: str,
+        mode: str,
+        goal: str,
+        status: str,
+        final_answer: str = "",
+        error: str = "",
+    ) -> MultiAgentRunModel:
+        result = await self._db.execute(
+            select(MultiAgentRunModel).where(MultiAgentRunModel.run_id == run_id)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            item = MultiAgentRunModel(
+                run_id=run_id,
+                thread_id=thread_id,
+                session_id=session_id,
+                scenario=scenario,
+                mode=mode,
+                goal=goal,
+                status=status,
+                final_answer=final_answer or None,
+                error=error or None,
+            )
+            self._db.add(item)
+            await self._db.flush()
+            return item
+
+        item.thread_id = thread_id or item.thread_id
+        item.session_id = session_id or item.session_id
+        item.scenario = scenario or item.scenario
+        item.mode = mode or item.mode
+        item.goal = goal or item.goal
+        item.status = status
+        item.final_answer = final_answer or item.final_answer
+        item.error = error or item.error
+        item.updated_at = datetime.utcnow()
+        await self._db.flush()
+        return item
+
+    async def get_by_run_id(self, run_id: str) -> MultiAgentRunModel | None:
+        result = await self._db.execute(
+            select(MultiAgentRunModel)
+            .where(MultiAgentRunModel.run_id == run_id)
+            .options(selectinload(MultiAgentRunModel.events))
+        )
+        return result.scalar_one_or_none()
+
+
+class MultiAgentEventRepository:
+    """多 Agent 关键事件审计数据访问对象。"""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self._db = db
+
+    async def add(
+        self,
+        *,
+        run_id: str,
+        agent_name: str,
+        event_type: str,
+        summary: str = "",
+        payload: dict | list | str | None = None,
+    ) -> MultiAgentEventModel:
+        if payload is None:
+            payload_json = ""
+        elif isinstance(payload, str):
+            payload_json = payload
+        else:
+            payload_json = json.dumps(payload, ensure_ascii=False)
+        item = MultiAgentEventModel(
+            run_id=run_id,
+            agent_name=agent_name,
+            event_type=event_type,
+            summary=summary,
+            payload_json=payload_json or None,
+        )
+        self._db.add(item)
+        await self._db.flush()
+        return item
+
+    async def list_by_run_id(self, run_id: str) -> list[MultiAgentEventModel]:
+        result = await self._db.execute(
+            select(MultiAgentEventModel)
+            .where(MultiAgentEventModel.run_id == run_id)
+            .order_by(MultiAgentEventModel.created_at.asc())
         )
         return list(result.scalars().all())

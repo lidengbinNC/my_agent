@@ -24,16 +24,9 @@ from my_agent.domain.multi_agent.message import AgentRole
 from my_agent.domain.tool.registry import ToolRegistry
 
 
-def create_data_analysis_pipeline(
-    llm: BaseLLMClient,
-    tool_registry: ToolRegistry,
-) -> HierarchicalCoordinator:
-    """创建数据分析协作流水线（Hierarchical）。
-
-    Returns:
-        配置好的 HierarchicalCoordinator
-    """
-    agents = [
+def build_data_analysis_agents() -> list[AgentSpec]:
+    """构建数据分析场景的 Agent 规格列表。"""
+    return [
         AgentSpec(
             name="manager",
             role=AgentRole.MANAGER,
@@ -87,6 +80,18 @@ def create_data_analysis_pipeline(
             max_iterations=4,
         ),
     ]
+
+
+def create_data_analysis_pipeline(
+    llm: BaseLLMClient,
+    tool_registry: ToolRegistry,
+) -> HierarchicalCoordinator:
+    """创建数据分析协作流水线（Hierarchical）。
+
+    Returns:
+        配置好的 HierarchicalCoordinator
+    """
+    agents = build_data_analysis_agents()
 
     return HierarchicalCoordinator(
         llm=llm,

@@ -456,16 +456,23 @@ async def get_checkpoints(
 
     Args:
         thread_id: 会话标识
-        graph_type: "conversation"（对话图）或 "hitl"（审核图）
+        graph_type: "conversation"（对话图）/ "hitl"（审核图）/ "react" / "multi_agent"
     """
     try:
-        from langgraph_impl.checkpoint_store import get_conversation_app, get_review_app, get_react_app
+        from langgraph_impl.checkpoint_store import (
+            get_conversation_app,
+            get_multi_agent_app,
+            get_react_app,
+            get_review_app,
+        )
         from langgraph_impl.checkpoint_demo import get_thread_history
 
         if graph_type == "hitl":
             app = get_review_app()
         elif graph_type == "react":
             app = get_react_app()
+        elif graph_type == "multi_agent":
+            app = get_multi_agent_app()
         else:
             app = get_conversation_app()
 

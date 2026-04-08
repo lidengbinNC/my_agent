@@ -136,3 +136,56 @@ class CustomerServiceFeedbackModel(Base):
 
     def __repr__(self) -> str:
         return f"<CustomerServiceFeedback id={self.id} session={self.session_id!r} type={self.feedback_type!r}>"
+
+
+class MultiAgentRunModel(Base):
+    """多 Agent 运行主表。"""
+
+    __tablename__ = "multi_agent_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    thread_id: Mapped[str] = mapped_column(String(120), default="", index=True)
+    session_id: Mapped[str] = mapped_column(String(36), default="", index=True)
+    scenario: Mapped[str] = mapped_column(String(50), default="custom")
+    mode: Mapped[str] = mapped_column(String(30), default="sequential")
+    goal: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    final_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    events: Mapped[list["MultiAgentEventModel"]] = relationship(
+        "MultiAgentEventModel",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<MultiAgentRun run_id={self.run_id!r} status={self.status!r}>"
+
+
+class MultiAgentEventModel(Base):
+    """多 Agent 关键事件审计表。"""
+
+    __tablename__ = "multi_agent_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        String(120),
+        ForeignKey("multi_agent_runs.run_id", ondelete="CASCADE"),
+        index=True,
+    )
+    agent_name: Mapped[str] = mapped_column(String(80), default="", index=True)
+    event_type: Mapped[str] = mapped_column(String(50), default="message", index=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    run: Mapped[MultiAgentRunModel] = relationship("MultiAgentRunModel", back_populates="events")
+
+    def __repr__(self) -> str:
+        return f"<MultiAgentEvent run_id={self.run_id!r} type={self.event_type!r}>"

@@ -25,17 +25,99 @@ const scenarioSelect = document.getElementById('scenario-select');
 const engineSelfBtn  = document.getElementById('engine-self-btn');
 const engineLgBtn    = document.getElementById('engine-lg-btn');
 const lgModeSelect   = document.getElementById('lg-mode-select');
+const customerServiceBtn = document.getElementById('customer-service-btn');
+const customerServiceText = document.getElementById('customer-service-text');
+const customerServicePanel = document.getElementById('customer-service-panel');
+const csModeSelect = document.getElementById('cs-mode-select');
+const csChannelInput = document.getElementById('cs-channel-input');
+const csCustomerIdInput = document.getElementById('cs-customer-id-input');
+const csOrderIdInput = document.getElementById('cs-order-id-input');
+const csExternalSessionInput = document.getElementById('cs-external-session-input');
+const csTicketIdInput = document.getElementById('cs-ticket-id-input');
+const csCustomerTierInput = document.getElementById('cs-customer-tier-input');
+const csLocaleInput = document.getElementById('cs-locale-input');
+const csKnowledgeDomainInput = document.getElementById('cs-knowledge-domain-input');
+const csTagsInput = document.getElementById('cs-tags-input');
+const csAllowWriteToggle = document.getElementById('cs-allow-write-toggle');
+const csApprovalBeforeAnswerToggle = document.getElementById('cs-approval-before-answer-toggle');
+const csPresetButtons = document.querySelectorAll('.cs-preset-btn');
 
 let isStreaming = false;
 let streamMode = true;       // 默认开启流式输出
 let deepThinkMode = false;   // 默认关闭深度思考
 let multiAgentMode = false;  // 多 Agent 协作模式
+let customerServiceMode = false; // 客服 Copilot 模式
 let currentSessionId = null;
 let defaultPlanAgentId = null; // 服务端预创建的 Plan-and-Execute Agent ID
 let selectedScenario = 'research_report'; // 默认多 Agent 场景
 let useLangGraph = false;    // 是否使用 LangGraph 引擎
 let lgMode = 'react';        // LangGraph 运行模式
 let lgThreadId = null;       // LangGraph 会话 ID，跨请求保持 checkpoint 连续性
+let multiAgentThreadId = null; // 多 Agent 运行 thread_id，仅用于 paused/resume
+
+const DEFAULT_CHAT_PLACEHOLDER = '输入你的问题...';
+const CUSTOMER_SERVICE_PLACEHOLDER = '输入客户问题，或让坐席生成建议回复/售后处理方案...';
+const CUSTOMER_SERVICE_MODE_LABELS = {
+    copilot: '坐席辅助',
+    read_only: '只读咨询',
+    ticket_draft: '工单草稿',
+    complaint_review: '投诉复核',
+    after_sales: '售后处理',
+    pre_sales: '售前咨询',
+};
+const CUSTOMER_SERVICE_PRESETS = {
+    logistics_delay: {
+        message: '客户反馈包裹已经 7 天没有物流更新，请帮我判断当前状态，并生成一段可直接回复客户的话术。',
+        mode: 'copilot',
+        allowWrite: false,
+        approvalBeforeAnswer: false,
+        context: {
+            customer_id: 'CUST-10086',
+            customer_tier: 'gold',
+            channel: 'whatsapp',
+            locale: 'zh-CN',
+            order_id: 'SO-20260403001',
+            ticket_id: '',
+            session_id: 'CS-SESSION-001',
+            knowledge_domain: 'faq',
+            tags: ['logistics', 'delay', 'vip'],
+        },
+    },
+    refund_complaint: {
+        message: '客户收到破损商品，要求退款并投诉处理缓慢。请评估风险、建议回复话术，并判断是否需要升级投诉工单。',
+        mode: 'complaint_review',
+        allowWrite: false,
+        approvalBeforeAnswer: true,
+        context: {
+            customer_id: 'CUST-30521',
+            customer_tier: 'silver',
+            channel: 'facebook',
+            locale: 'zh-CN',
+            order_id: 'SO-20260402017',
+            ticket_id: 'TICKET-7781',
+            session_id: 'CS-SESSION-019',
+            knowledge_domain: 'policy',
+            tags: ['refund', 'complaint', 'damaged'],
+        },
+    },
+    after_sales_ticket: {
+        message: '客户收到错误尺码，要求换货并补偿优惠券。请整理售后建单摘要、优先级，以及还需要补充的信息。',
+        mode: 'ticket_draft',
+        allowWrite: true,
+        approvalBeforeAnswer: false,
+        context: {
+            customer_id: 'CUST-55209',
+            customer_tier: 'vip',
+            channel: 'line',
+            locale: 'zh-CN',
+            order_id: 'SO-20260401008',
+            ticket_id: '',
+            session_id: 'CS-SESSION-023',
+            knowledge_domain: 'sop',
+            tags: ['after_sales', 'exchange', 'compensation'],
+        },
+    },
+};
 
 // 启动时拉取默认 Plan Agent ID
 (async () => {
@@ -70,6 +152,9 @@ function setEngine(lg) {
     const INACTIVE_REMOVE = ['bg-white', 'shadow-sm', 'font-medium', 'text-emerald-700', 'text-gray-700'];
 
     if (lg) {
+        if (customerServiceMode) {
+            setCustomerServiceMode(false);
+        }
         // LangGraph 按钮激活
         engineLgBtn.classList.remove(...INACTIVE_REMOVE);
         engineLgBtn.classList.add(...ACTIVE_ADD, 'text-emerald-700');
@@ -105,8 +190,70 @@ function setEngine(lg) {
     }
 }
 
+function setCustomerServiceMode(enabled) {
+    customerServiceMode = enabled;
+
+    if (enabled) {
+        if (useLangGraph) setEngine(false);
+        if (deepThinkMode) {
+            deepThinkMode = false;
+            deepThinkBtn.classList.remove('border-violet-500', 'text-violet-700', 'bg-violet-50');
+            deepThinkBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
+            deepThinkText.textContent = '深度思考';
+        }
+        if (multiAgentMode) {
+            multiAgentMode = false;
+            multiAgentBtn.classList.remove('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
+            multiAgentBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-indigo-300', 'hover:text-indigo-600', 'hover:bg-indigo-50');
+            multiAgentText.textContent = '多 Agent';
+            scenarioSelect.classList.add('hidden');
+        }
+
+        customerServiceBtn.classList.remove('border-gray-200', 'text-gray-500', 'hover:border-cyan-300', 'hover:text-cyan-600', 'hover:bg-cyan-50');
+        customerServiceBtn.classList.add('border-cyan-500', 'text-cyan-700', 'bg-cyan-50');
+        customerServiceText.textContent = '客服 Copilot 开';
+        customerServicePanel.classList.remove('hidden');
+        userInput.placeholder = CUSTOMER_SERVICE_PLACEHOLDER;
+        return;
+    }
+
+    customerServiceBtn.classList.remove('border-cyan-500', 'text-cyan-700', 'bg-cyan-50');
+    customerServiceBtn.classList.add('border-gray-200', 'text-gray-500', 'hover:border-cyan-300', 'hover:text-cyan-600', 'hover:bg-cyan-50');
+    customerServiceText.textContent = '客服 Copilot';
+    customerServicePanel.classList.add('hidden');
+    userInput.placeholder = DEFAULT_CHAT_PLACEHOLDER;
+}
+
+function applyCustomerServicePreset(presetKey) {
+    const preset = CUSTOMER_SERVICE_PRESETS[presetKey];
+    if (!preset) return;
+
+    if (!customerServiceMode) {
+        setCustomerServiceMode(true);
+    }
+
+    csModeSelect.value = preset.mode;
+    csChannelInput.value = preset.context.channel || 'whatsapp';
+    csCustomerIdInput.value = preset.context.customer_id || '';
+    csOrderIdInput.value = preset.context.order_id || '';
+    csExternalSessionInput.value = preset.context.session_id || '';
+    csTicketIdInput.value = preset.context.ticket_id || '';
+    csCustomerTierInput.value = preset.context.customer_tier || '';
+    csLocaleInput.value = preset.context.locale || 'zh-CN';
+    csKnowledgeDomainInput.value = preset.context.knowledge_domain || 'faq';
+    csTagsInput.value = (preset.context.tags || []).join(', ');
+    csAllowWriteToggle.checked = Boolean(preset.allowWrite);
+    csApprovalBeforeAnswerToggle.checked = Boolean(preset.approvalBeforeAnswer);
+    userInput.value = preset.message;
+    userInput.focus();
+}
+
 engineSelfBtn.addEventListener('click', () => setEngine(false));
 engineLgBtn.addEventListener('click', () => setEngine(true));
+customerServiceBtn.addEventListener('click', () => setCustomerServiceMode(!customerServiceMode));
+csPresetButtons.forEach((btn) => {
+    btn.addEventListener('click', () => applyCustomerServicePreset(btn.dataset.csPreset));
+});
 
 lgModeSelect.addEventListener('change', (e) => {
     lgMode = e.target.value;
@@ -120,6 +267,9 @@ deepThinkBtn.addEventListener('click', () => {
         deepThinkBtn.classList.remove('border-gray-200', 'text-gray-500', 'hover:border-violet-300', 'hover:text-violet-600', 'hover:bg-violet-50');
         deepThinkBtn.classList.add('border-violet-500', 'text-violet-700', 'bg-violet-50');
         deepThinkText.textContent = '深度思考 开';
+        if (customerServiceMode) {
+            setCustomerServiceMode(false);
+        }
         // 深度思考与多 Agent 互斥
         if (multiAgentMode) {
             multiAgentMode = false;
@@ -145,6 +295,9 @@ multiAgentBtn.addEventListener('click', () => {
         multiAgentBtn.classList.add('border-indigo-500', 'text-indigo-700', 'bg-indigo-50');
         multiAgentText.textContent = '多 Agent 开';
         scenarioSelect.classList.remove('hidden');
+        if (customerServiceMode) {
+            setCustomerServiceMode(false);
+        }
         // 多 Agent 模式与深度思考互斥
         if (deepThinkMode) {
             deepThinkMode = false;
@@ -179,6 +332,7 @@ newSessionBtn.addEventListener('click', () => {
 
     currentSessionId = null;
     lgThreadId = null;       // 新建会话时同步重置 LangGraph thread_id
+    multiAgentThreadId = null;
 
     // 重置深度思考按钮状态
     if (deepThinkMode) {
@@ -230,6 +384,13 @@ chatForm.addEventListener('submit', async (e) => {
     if (useLangGraph) {
         // LangGraph 引擎
         await streamLangGraph(message);
+    } else if (customerServiceMode) {
+        // 客服 Copilot 模式
+        if (streamMode) {
+            await streamCustomerService(message);
+        } else {
+            await nonStreamCustomerService(message);
+        }
     } else if (multiAgentMode) {
         // 多 Agent 协作：走 Coordinator 路由
         await streamMultiAgent(message);
@@ -286,6 +447,100 @@ async function nonStreamChat(message) {
     } catch (err) {
         answerBubble.innerHTML = `<span class="text-red-600">❌ 错误: ${escapeHtml(err.message)}</span>`;
         answerBubble.classList.remove('hidden');
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+function getCustomerServiceRequest(message, stream) {
+    const tags = csTagsInput.value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    return {
+        message,
+        session_id: currentSessionId,
+        stream,
+        mode: csModeSelect.value,
+        allow_write_actions: csAllowWriteToggle.checked,
+        approval_before_answer: csApprovalBeforeAnswerToggle.checked,
+        customer_context: {
+            customer_id: csCustomerIdInput.value.trim(),
+            customer_tier: csCustomerTierInput.value.trim(),
+            channel: csChannelInput.value,
+            locale: csLocaleInput.value.trim() || 'zh-CN',
+            order_id: csOrderIdInput.value.trim(),
+            ticket_id: csTicketIdInput.value.trim(),
+            knowledge_domain: csKnowledgeDomainInput.value,
+            knowledge_base: '',
+            session_id: csExternalSessionInput.value.trim(),
+            tags,
+            metadata: {},
+        },
+    };
+}
+
+function appendCustomerServiceBadge(container, requestBody) {
+    const context = requestBody.customer_context || {};
+    const summaryParts = [
+        CUSTOMER_SERVICE_MODE_LABELS[requestBody.mode] || requestBody.mode,
+        context.channel || '',
+        context.customer_id ? `客户 ${context.customer_id}` : '',
+        context.order_id ? `订单 ${context.order_id}` : '',
+        context.ticket_id ? `工单 ${context.ticket_id}` : '',
+        context.knowledge_domain ? `知识域 ${context.knowledge_domain}` : '',
+    ].filter(Boolean);
+
+    const badge = document.createElement('div');
+    badge.className = 'flex items-start gap-2 text-xs text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg px-3 py-2 mb-2';
+    badge.innerHTML = `
+        <svg class="w-3.5 h-3.5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4v-4z"/>
+        </svg>
+        <div class="min-w-0">
+            <div class="font-semibold text-cyan-800">客服 Copilot 模拟</div>
+            <div class="text-cyan-700 mt-0.5">${escapeHtml(summaryParts.join(' | ') || '客服上下文已注入')}</div>
+        </div>`;
+    container.appendChild(badge);
+}
+
+async function nonStreamCustomerService(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const stepsContainer = msgWrapper.querySelector('.steps-container');
+    const answerBubble = msgWrapper.querySelector('.answer-bubble');
+    const requestBody = getCustomerServiceRequest(message, false);
+
+    appendCustomerServiceBadge(stepsContainer, requestBody);
+
+    try {
+        const resp = await fetch('/api/v1/customer-service/copilot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const data = await resp.json();
+        if (data.session_id) {
+            currentSessionId = data.session_id;
+        }
+        if (data.status === 'paused') {
+            handlePaused(stepsContainer, data);
+        }
+        if (data.content) {
+            answerBubble.innerHTML = formatMarkdown(data.content);
+            answerBubble.classList.remove('hidden');
+        } else if (data.status !== 'paused') {
+            answerBubble.innerHTML = formatMarkdown('无响应');
+            answerBubble.classList.remove('hidden');
+        }
+        if (data.usage) showTokenUsage(data.usage);
+    } catch (err) {
+        appendErrorCard(stepsContainer, err.message);
     } finally {
         setStreaming(false);
         scrollToBottom();
@@ -357,6 +612,95 @@ async function streamChat(message) {
                                 currentSessionId = data.session_id;
                             }
                             if (data.usage) showTokenUsage(data.usage);
+                            break;
+                        case 'paused':
+                            if (data.session_id) {
+                                currentSessionId = data.session_id;
+                            }
+                            handlePaused(stepsContainer, data);
+                            break;
+                        case 'error':
+                            appendErrorCard(stepsContainer, data.error || '未知错误');
+                            break;
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        appendErrorCard(stepsContainer, err.message);
+    } finally {
+        setStreaming(false);
+        scrollToBottom();
+    }
+}
+
+async function streamCustomerService(message) {
+    const msgWrapper = appendAssistantWrapper();
+    const stepsContainer = msgWrapper.querySelector('.steps-container');
+    const answerBubble   = msgWrapper.querySelector('.answer-bubble');
+    const requestBody = getCustomerServiceRequest(message, true);
+
+    appendCustomerServiceBadge(stepsContainer, requestBody);
+
+    let currentEvent = '';
+
+    try {
+        const resp = await fetch('/api/v1/customer-service/copilot', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+        });
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const reader  = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let answerContent = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    currentEvent = line.slice(7).trim();
+                } else if (line.startsWith('data: ')) {
+                    let data;
+                    try { data = JSON.parse(line.slice(6)); }
+                    catch { continue; }
+
+                    switch (currentEvent) {
+                        case 'thinking':
+                            handleThinking(stepsContainer, data);
+                            break;
+                        case 'tool_call':
+                            handleToolCall(stepsContainer, data);
+                            break;
+                        case 'tool_result':
+                            handleToolResult(stepsContainer, data);
+                            break;
+                        case 'content':
+                            answerContent += data.delta || '';
+                            answerBubble.innerHTML = formatMarkdown(answerContent);
+                            answerBubble.classList.remove('hidden');
+                            scrollToBottom();
+                            break;
+                        case 'done':
+                            if (data.session_id) {
+                                currentSessionId = data.session_id;
+                            }
+                            if (data.usage) showTokenUsage(data.usage);
+                            break;
+                        case 'paused':
+                            if (data.session_id) {
+                                currentSessionId = data.session_id;
+                            }
+                            handlePaused(stepsContainer, data);
                             break;
                         case 'error':
                             appendErrorCard(stepsContainer, data.error || '未知错误');
@@ -483,6 +827,8 @@ async function streamMultiAgent(message) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 goal: message,
+                session_id: currentSessionId,
+                thread_id: multiAgentThreadId || '',
                 scenario: selectedScenario,
                 mode: selectedScenario === 'data_analysis' ? 'hierarchical' : 'sequential',
                 stream: true,
@@ -511,6 +857,9 @@ async function streamMultiAgent(message) {
                     let data;
                     try { data = JSON.parse(line.slice(6)); } catch { continue; }
 
+                    if (data.session_id) currentSessionId = data.session_id;
+                    if (data.thread_id) multiAgentThreadId = data.thread_id;
+
                     switch (currentEvent) {
                         case 'thinking':
                             handleAgentThinking(stepsContainer, data);
@@ -529,8 +878,13 @@ async function streamMultiAgent(message) {
                             if (data.agent_colors && Object.keys(data.agent_colors).length) {
                                 renderAgentLegend(stepsContainer, data.agent_colors);
                             }
+                            multiAgentThreadId = null;
+                            break;
+                        case 'paused':
+                            handlePaused(stepsContainer, data);
                             break;
                         case 'error':
+                            multiAgentThreadId = null;
                             appendErrorCard(stepsContainer, data.error || '未知错误');
                             break;
                     }
@@ -809,6 +1163,219 @@ function handleToolResult(container, data) {
         header.classList.add('bg-green-50', 'hover:bg-green-100');
         header.querySelector('.text-blue-500').textContent = '✅';
     }
+    scrollToBottom();
+}
+
+function handlePaused(container, data) {
+    container.querySelector('.thinking-live')?.remove();
+
+    const pauseReason = data.pause_reason || '运行已暂停';
+    const action = data.action || '';
+    const args = data.args ? JSON.stringify(data.args, null, 2) : '';
+    const preview = data.answer_preview || '';
+    const needsApproval = Boolean(data.requires_approval);
+    const runId = data.run_id || '';
+    const resumeUrl = data.resume_url || '';
+    const resumeMode = data.resume_mode || 'chat';
+
+    const card = document.createElement('div');
+    card.className = 'step-card border border-amber-200 rounded-xl overflow-hidden mb-2 shadow-sm';
+    if (runId) {
+        card.dataset.runId = runId;
+    }
+    if (resumeUrl) {
+        card.dataset.resumeUrl = resumeUrl;
+    }
+    if (resumeMode) {
+        card.dataset.resumeMode = resumeMode;
+    }
+    card.innerHTML = `
+        <button class="step-header w-full flex items-center gap-3 px-4 py-2.5 bg-amber-50 hover:bg-amber-100 transition-colors text-left"
+                onclick="toggleStep(this)">
+            <span class="text-amber-500 text-sm">${needsApproval ? '⏸️' : '⏳'}</span>
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold text-amber-700">${needsApproval ? '等待审批' : '执行暂停'}</span>
+                    <span class="text-xs text-gray-500 truncate">${escapeHtml(pauseReason)}</span>
+                </div>
+                <div class="text-xs text-gray-500 truncate mt-0.5">
+                    ${escapeHtml(action || data.message || '当前节点未提供动作名称')}
+                </div>
+            </div>
+            <span class="chevron text-gray-400 text-xs transition-transform">▼</span>
+        </button>
+        <div class="step-body hidden px-4 py-3 bg-white border-t border-amber-100 text-xs space-y-2">
+            <div>
+                <div class="font-semibold text-gray-500 mb-1">⏸ 暂停原因</div>
+                <div class="text-gray-700 leading-relaxed">${escapeHtml(pauseReason)}</div>
+            </div>
+            ${action ? `
+            <div>
+                <div class="font-semibold text-gray-500 mb-1">⚡ 待执行动作</div>
+                <code class="bg-amber-50 text-amber-800 px-2 py-1 rounded inline-block">${escapeHtml(action)}</code>
+            </div>` : ''}
+            ${args ? `
+            <div>
+                <div class="font-semibold text-gray-500 mb-1">📥 动作参数</div>
+                <pre class="bg-amber-50 border border-amber-200 rounded-lg p-2 overflow-x-auto text-amber-800 font-mono whitespace-pre-wrap">${escapeHtml(args)}</pre>
+            </div>` : ''}
+            ${preview ? `
+            <div>
+                <div class="font-semibold text-gray-500 mb-1">📝 答复预览</div>
+                <div class="bg-gray-50 border border-gray-200 rounded-lg p-2 text-gray-700 leading-relaxed">${formatMarkdown(preview)}</div>
+            </div>` : ''}
+            ${runId ? `
+            <div class="pt-1">
+                <div class="font-semibold text-gray-500 mb-2">▶ 审批操作</div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <button type="button" class="resume-action-btn text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                            onclick="resumePausedRun(this, 'approve')">批准继续</button>
+                    <button type="button" class="resume-action-btn text-xs px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                            onclick="resumePausedRun(this, 'reject')">驳回</button>
+                    <span class="pause-action-status text-xs text-gray-500">等待手动处理</span>
+                </div>
+            </div>` : ''}
+        </div>`;
+    container.appendChild(card);
+    scrollToBottom();
+}
+
+function setResumeButtonsDisabled(card, disabled) {
+    const buttons = card.querySelectorAll('.resume-action-btn');
+    buttons.forEach((btn) => {
+        btn.disabled = disabled;
+        btn.style.opacity = disabled ? '0.6' : '1';
+        btn.style.cursor = disabled ? 'not-allowed' : 'pointer';
+    });
+}
+
+async function resumePausedRun(triggerEl, action) {
+    if (isStreaming) return;
+
+    const card = triggerEl.closest('.step-card');
+    const runId = card?.dataset.runId;
+    const resumeUrl = card?.dataset.resumeUrl || `/api/v1/chat/runs/${encodeURIComponent(runId || '')}/resume`;
+    const resumeMode = card?.dataset.resumeMode || 'chat';
+    const assistantWrapper = triggerEl.closest('.flex.justify-start');
+    const stepsContainer = assistantWrapper?.querySelector('.steps-container');
+    const answerBubble = assistantWrapper?.querySelector('.answer-bubble');
+    const statusText = card?.querySelector('.pause-action-status');
+
+    if (!card || !runId || !stepsContainer || !answerBubble) return;
+
+    const actionText = action === 'approve' ? '已批准，继续执行中...' : '已驳回，继续生成处理结果...';
+    if (statusText) {
+        statusText.textContent = actionText;
+    }
+
+    setResumeButtonsDisabled(card, true);
+    setStreaming(true);
+
+    try {
+        await streamResumeRun(runId, action, stepsContainer, answerBubble, resumeUrl, resumeMode);
+        if (statusText) {
+            statusText.textContent = '本次审批已处理';
+        }
+    } catch (err) {
+        if (statusText) {
+            statusText.textContent = `恢复失败: ${err.message}`;
+        }
+        appendErrorCard(stepsContainer, err.message);
+        setResumeButtonsDisabled(card, false);
+    } finally {
+        setStreaming(false);
+    }
+}
+
+async function streamResumeRun(runId, action, stepsContainer, answerBubble, resumeUrl, resumeMode) {
+    const resp = await fetch(resumeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action,
+            feedback: '',
+            stream: true,
+        }),
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+    let answerContent = answerBubble.classList.contains('hidden') ? '' : answerBubble.textContent || '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+            if (line.startsWith('event: ')) {
+                currentEvent = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+                let data;
+                try { data = JSON.parse(line.slice(6)); }
+                catch { continue; }
+
+                    if (data.session_id) {
+                        currentSessionId = data.session_id;
+                    }
+                    if (data.thread_id && resumeMode === 'multi_agent') {
+                        multiAgentThreadId = data.thread_id;
+                    }
+
+                switch (currentEvent) {
+                    case 'thinking':
+                            if (resumeMode === 'multi_agent') {
+                                handleAgentThinking(stepsContainer, data);
+                            } else {
+                                handleThinking(stepsContainer, data);
+                            }
+                        break;
+                    case 'tool_call':
+                        handleToolCall(stepsContainer, data);
+                        break;
+                    case 'tool_result':
+                            if (resumeMode === 'multi_agent') {
+                                handleAgentDone(stepsContainer, data);
+                            } else {
+                                handleToolResult(stepsContainer, data);
+                            }
+                        break;
+                    case 'content':
+                        answerContent += data.delta || '';
+                        answerBubble.innerHTML = formatMarkdown(answerContent);
+                        answerBubble.classList.remove('hidden');
+                        scrollToBottom();
+                        break;
+                    case 'done':
+                            if (resumeMode === 'multi_agent') {
+                                multiAgentThreadId = null;
+                                if (data.agent_colors && Object.keys(data.agent_colors).length) {
+                                    renderAgentLegend(stepsContainer, data.agent_colors);
+                                }
+                            }
+                        if (data.usage) showTokenUsage(data.usage);
+                        break;
+                    case 'paused':
+                        handlePaused(stepsContainer, data);
+                        break;
+                    case 'error':
+                            if (resumeMode === 'multi_agent') {
+                                multiAgentThreadId = null;
+                            }
+                        appendErrorCard(stepsContainer, data.error || '未知错误');
+                        break;
+                }
+            }
+        }
+    }
+
     scrollToBottom();
 }
 

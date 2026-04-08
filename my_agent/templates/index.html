@@ -19,6 +19,7 @@
             safelist: [
                 'bg-white', 'shadow-sm', 'font-medium',
                 'text-gray-400', 'text-gray-700', 'text-emerald-700',
+                'border-cyan-500', 'text-cyan-700', 'bg-cyan-50',
             ]
         }
     </script>
@@ -181,6 +182,16 @@
                     </svg>
                     <span id="deep-think-text">深度思考</span>
                 </button>
+                <button id="customer-service-btn"
+                        title="开启后改为调用客服 Copilot 接口，模拟客服场景下的坐席辅助流程"
+                        class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all
+                               border-gray-200 text-gray-500 hover:border-cyan-300 hover:text-cyan-600 hover:bg-cyan-50">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4l-4 4v-4z"/>
+                    </svg>
+                    <span id="customer-service-text">客服 Copilot</span>
+                </button>
                 <!-- 流式/非流式切换 -->
                 <label class="stream-toggle-label" title="开启后逐字输出，关闭后等待完整响应">
                     <input type="checkbox" id="stream-toggle" checked>
@@ -191,6 +202,119 @@
                         <span id="stream-mode-text">流式输出</span>
                     </span>
                 </label>
+            </div>
+            <div id="customer-service-panel"
+                 class="hidden max-w-3xl mx-auto mt-3 border border-cyan-200 bg-cyan-50 rounded-2xl p-4 space-y-3 shadow-sm">
+                <div class="flex items-start justify-between gap-3 flex-wrap">
+                    <div>
+                        <div class="text-sm font-semibold text-cyan-800">客服场景模拟</div>
+                        <p class="text-xs text-cyan-700 mt-1">
+                            开启后将请求 <code class="bg-cyan-100 text-cyan-800 px-1.5 py-0.5 rounded">/api/v1/customer-service/copilot</code>，
+                            用于演示客服坐席辅助、售后判断和投诉处理流程。
+                        </p>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button type="button" data-cs-preset="logistics_delay"
+                                class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-100 transition-colors">
+                            物流催件
+                        </button>
+                        <button type="button" data-cs-preset="refund_complaint"
+                                class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-100 transition-colors">
+                            退款投诉
+                        </button>
+                        <button type="button" data-cs-preset="after_sales_ticket"
+                                class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-100 transition-colors">
+                            售后建单
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">客服模式</span>
+                        <select id="cs-mode-select"
+                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                            <option value="copilot">copilot</option>
+                            <option value="read_only">read_only</option>
+                            <option value="ticket_draft">ticket_draft</option>
+                            <option value="complaint_review">complaint_review</option>
+                            <option value="after_sales">after_sales</option>
+                            <option value="pre_sales">pre_sales</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">渠道</span>
+                        <select id="cs-channel-input"
+                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                            <option value="whatsapp">whatsapp</option>
+                            <option value="facebook">facebook</option>
+                            <option value="line">line</option>
+                            <option value="email">email</option>
+                            <option value="webchat">webchat</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">客户 ID</span>
+                        <input id="cs-customer-id-input" type="text" placeholder="例如 CUST-10086"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">订单 ID</span>
+                        <input id="cs-order-id-input" type="text" placeholder="例如 SO-20260403001"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">外部客服会话 ID</span>
+                        <input id="cs-external-session-input" type="text" placeholder="例如 CS-SESSION-001"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">工单 ID</span>
+                        <input id="cs-ticket-id-input" type="text" placeholder="例如 TICKET-9001"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">客户等级</span>
+                        <input id="cs-customer-tier-input" type="text" placeholder="例如 vip / gold"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">语言地区</span>
+                        <input id="cs-locale-input" type="text" value="zh-CN"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">知识域</span>
+                        <select id="cs-knowledge-domain-input"
+                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                            <option value="faq">faq</option>
+                            <option value="sop">sop</option>
+                            <option value="policy">policy</option>
+                            <option value="ticket">ticket</option>
+                            <option value="quality">quality</option>
+                            <option value="product">product</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">业务标签</span>
+                        <input id="cs-tags-input" type="text" placeholder="逗号分隔，例如 logistics, delay, vip"
+                               class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                    </label>
+                </div>
+
+                <div class="flex items-center gap-4 flex-wrap">
+                    <label class="inline-flex items-center gap-2 text-xs text-cyan-800">
+                        <input id="cs-allow-write-toggle" type="checkbox" class="rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500">
+                        <span>允许进入写操作审批流</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-xs text-cyan-800">
+                        <input id="cs-approval-before-answer-toggle" type="checkbox" class="rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500">
+                        <span>最终答复前审批</span>
+                    </label>
+                    <span class="text-xs text-cyan-700">
+                        提示：`ticket_draft`、`complaint_review` 或开启写操作时，可能触发审批暂停事件。
+                    </span>
+                </div>
             </div>
         </div>
     </main>
