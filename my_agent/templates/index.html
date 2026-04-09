@@ -222,6 +222,10 @@
                                 class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-100 transition-colors">
                             退款投诉
                         </button>
+                        <button type="button" data-cs-preset="complaint_multi_agent"
+                                class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-300 bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">
+                            投诉多智能体
+                        </button>
                         <button type="button" data-cs-preset="after_sales_ticket"
                                 class="cs-preset-btn text-xs px-2.5 py-1.5 rounded-lg border border-cyan-200 bg-white text-cyan-700 hover:bg-cyan-100 transition-colors">
                             售后建单
@@ -300,6 +304,24 @@
                         <input id="cs-tags-input" type="text" placeholder="逗号分隔，例如 logistics, delay, vip"
                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
                     </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">执行策略</span>
+                        <select id="cs-execution-strategy-select"
+                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                            <option value="auto">auto</option>
+                            <option value="single_agent">single_agent</option>
+                            <option value="multi_agent">multi_agent</option>
+                        </select>
+                    </label>
+                    <label class="block">
+                        <span class="block text-xs font-medium text-cyan-800 mb-1">多智能体场景</span>
+                        <select id="cs-multi-agent-scenario-select"
+                                class="w-full rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent">
+                            <option value="">自动选择</option>
+                            <option value="customer_complaint_review">customer_complaint_review</option>
+                            <option value="customer_complex_case">customer_complex_case</option>
+                        </select>
+                    </label>
                 </div>
 
                 <div class="flex items-center gap-4 flex-wrap">
@@ -313,6 +335,10 @@
                     </label>
                     <span class="text-xs text-cyan-700">
                         提示：`ticket_draft`、`complaint_review` 或开启写操作时，可能触发审批暂停事件。
+                    </span>
+                    <span class="text-xs text-cyan-700">
+                        “投诉多智能体”示例会强制附带 <code class="bg-cyan-100 text-cyan-800 px-1 py-0.5 rounded">execution_strategy=multi_agent</code>
+                        和 <code class="bg-cyan-100 text-cyan-800 px-1 py-0.5 rounded">customer_complaint_review</code>。
                     </span>
                 </div>
             </div>

@@ -289,6 +289,7 @@ def build_multi_agent_graph(*, checkpointer: Any | None = None) -> Any:
         "apply_handoffs",
         route_after_apply_handoffs,
         {
+            "supervisor": "supervisor",
             "run_worker": "run_worker",
             "run_parallel_workers": "run_parallel_workers",
             "manager_review": "manager_review",

@@ -93,6 +93,8 @@ def test_build_multi_agent_graph_compiles_without_state_key_conflicts():
     app = build_multi_agent_graph()
 
     assert app is not None
+    apply_handoffs_branch = app.builder.branches["apply_handoffs"]["route_after_apply_handoffs"]
+    assert apply_handoffs_branch.ends["supervisor"] == "supervisor"
 
 
 def test_supervisor_mode_routes_through_supervisor_node():

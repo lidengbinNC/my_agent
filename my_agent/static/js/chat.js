@@ -38,6 +38,8 @@ const csCustomerTierInput = document.getElementById('cs-customer-tier-input');
 const csLocaleInput = document.getElementById('cs-locale-input');
 const csKnowledgeDomainInput = document.getElementById('cs-knowledge-domain-input');
 const csTagsInput = document.getElementById('cs-tags-input');
+const csExecutionStrategySelect = document.getElementById('cs-execution-strategy-select');
+const csMultiAgentScenarioSelect = document.getElementById('cs-multi-agent-scenario-select');
 const csAllowWriteToggle = document.getElementById('cs-allow-write-toggle');
 const csApprovalBeforeAnswerToggle = document.getElementById('cs-approval-before-answer-toggle');
 const csPresetButtons = document.querySelectorAll('.cs-preset-btn');
@@ -86,6 +88,8 @@ const CUSTOMER_SERVICE_PRESETS = {
     refund_complaint: {
         message: '客户收到破损商品，要求退款并投诉处理缓慢。请评估风险、建议回复话术，并判断是否需要升级投诉工单。',
         mode: 'complaint_review',
+        executionStrategy: 'auto',
+        multiAgentScenario: '',
         allowWrite: false,
         approvalBeforeAnswer: true,
         context: {
@@ -100,9 +104,30 @@ const CUSTOMER_SERVICE_PRESETS = {
             tags: ['refund', 'complaint', 'damaged'],
         },
     },
+    complaint_multi_agent: {
+        message: '客户连续多次投诉商品破损和退款处理缓慢，声称要去平台申诉并要求赔偿。请按投诉复核流程调用多智能体，输出风险等级、事实摘要、政策依据、升级建议、推荐回复和工单草稿。',
+        mode: 'complaint_review',
+        executionStrategy: 'multi_agent',
+        multiAgentScenario: 'customer_complaint_review',
+        allowWrite: false,
+        approvalBeforeAnswer: true,
+        context: {
+            customer_id: 'CUST-88021',
+            customer_tier: 'vip',
+            channel: 'facebook',
+            locale: 'zh-CN',
+            order_id: 'SO-20260408019',
+            ticket_id: 'TICKET-9912',
+            session_id: 'CS-SESSION-118',
+            knowledge_domain: 'policy',
+            tags: ['complaint', 'escalated', 'vip_complaint', 'damaged'],
+        },
+    },
     after_sales_ticket: {
         message: '客户收到错误尺码，要求换货并补偿优惠券。请整理售后建单摘要、优先级，以及还需要补充的信息。',
         mode: 'ticket_draft',
+        executionStrategy: 'auto',
+        multiAgentScenario: '',
         allowWrite: true,
         approvalBeforeAnswer: false,
         context: {
@@ -242,10 +267,19 @@ function applyCustomerServicePreset(presetKey) {
     csLocaleInput.value = preset.context.locale || 'zh-CN';
     csKnowledgeDomainInput.value = preset.context.knowledge_domain || 'faq';
     csTagsInput.value = (preset.context.tags || []).join(', ');
+    csExecutionStrategySelect.value = preset.executionStrategy || 'auto';
+    csMultiAgentScenarioSelect.value = preset.multiAgentScenario || '';
     csAllowWriteToggle.checked = Boolean(preset.allowWrite);
     csApprovalBeforeAnswerToggle.checked = Boolean(preset.approvalBeforeAnswer);
     userInput.value = preset.message;
     userInput.focus();
+    syncCustomerServiceExecutionControls();
+}
+
+function syncCustomerServiceExecutionControls() {
+    const isMultiAgent = csExecutionStrategySelect.value === 'multi_agent';
+    csMultiAgentScenarioSelect.disabled = !isMultiAgent;
+    csMultiAgentScenarioSelect.classList.toggle('opacity-60', !isMultiAgent);
 }
 
 engineSelfBtn.addEventListener('click', () => setEngine(false));
@@ -254,6 +288,8 @@ customerServiceBtn.addEventListener('click', () => setCustomerServiceMode(!custo
 csPresetButtons.forEach((btn) => {
     btn.addEventListener('click', () => applyCustomerServicePreset(btn.dataset.csPreset));
 });
+csExecutionStrategySelect.addEventListener('change', syncCustomerServiceExecutionControls);
+syncCustomerServiceExecutionControls();
 
 lgModeSelect.addEventListener('change', (e) => {
     lgMode = e.target.value;
@@ -464,6 +500,8 @@ function getCustomerServiceRequest(message, stream) {
         session_id: currentSessionId,
         stream,
         mode: csModeSelect.value,
+        execution_strategy: csExecutionStrategySelect.value,
+        multi_agent_scenario: csMultiAgentScenarioSelect.value,
         allow_write_actions: csAllowWriteToggle.checked,
         approval_before_answer: csApprovalBeforeAnswerToggle.checked,
         customer_context: {
@@ -486,6 +524,9 @@ function appendCustomerServiceBadge(container, requestBody) {
     const context = requestBody.customer_context || {};
     const summaryParts = [
         CUSTOMER_SERVICE_MODE_LABELS[requestBody.mode] || requestBody.mode,
+        requestBody.execution_strategy === 'multi_agent'
+            ? `多智能体 ${requestBody.multi_agent_scenario || 'auto'}`
+            : `策略 ${requestBody.execution_strategy || 'auto'}`,
         context.channel || '',
         context.customer_id ? `客户 ${context.customer_id}` : '',
         context.order_id ? `订单 ${context.order_id}` : '',
